@@ -1,0 +1,1 @@
+sshfs -o allow_other pi@raspi-zero:/home/pi/source/repos/go.neose-fsp-camera.gocv-driver ~/source/repos/go.neose-fsp-camera.gocv-driver/remotesrv
