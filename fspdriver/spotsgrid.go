@@ -318,26 +318,6 @@ func DetectGridNodes(mat gocv.Mat) []GridNode {
 		panic("imwrite nok")
 	}
 
-	// // Pad the result to match the original size
-	// paddedThresholdedMatchResult := gocv.Zeros(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
-	// defer paddedThresholdedMatchResult.Close()
-
-	// dX := (mat.Cols() - thresholdedMatchResult.Cols()) / 2
-	// dY := (mat.Rows() - thresholdedMatchResult.Rows()) / 2
-	// roi := image.Rect(
-	// 	dX,
-	// 	dY,
-	// 	thresholdedMatchResult.Cols()+dX,
-	// 	thresholdedMatchResult.Rows()+dY,
-	// )
-	// log.Println(roi.Size(), roi.Min.X, roi.Min.Y, roi.Max.X, roi.Max.Y)
-	// dstROI := paddedThresholdedMatchResult.Region(roi)
-	// thresholdedMatchResult.CopyTo(&dstROI)
-
-	// if ok := gocv.IMWrite(filepath.Join("compute", "padded_thresholded_matching_result.bmp"), paddedThresholdedMatchResult); !ok {
-	// 	panic("imwrite nok")
-	// }
-
 	// Detect Contours
 	contours := gocv.FindContours(thresholdedMatchResult, gocv.RetrievalTree, gocv.ChainApproxSimple)
 	log.Printf("Found %d contours", contours.Size())
@@ -395,7 +375,7 @@ func DetectGridNodes(mat gocv.Mat) []GridNode {
 		)
 	}
 
-	if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result_with_detected_ellipses.bmp"), hresholdedMatchResultWithEllipses); !ok {
+	if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result_with_detected_ellipses.bmp"), thresholdedMatchResultWithEllipses); !ok {
 		panic("imwrite nok")
 	}
 
