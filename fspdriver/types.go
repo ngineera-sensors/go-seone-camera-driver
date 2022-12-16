@@ -6,3 +6,9 @@ type GridNode struct {
 	Row int
 	Col int
 }
+
+type Frame struct {
+	I         int
+	Timestamp int
+	Values    []float64
+}

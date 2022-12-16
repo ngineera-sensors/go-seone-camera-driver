@@ -2,18 +2,22 @@ package fspdriver
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"gocv.io/x/gocv"
 )
 
 const (
-	MMI_EXTRACTION_ELLIPSE_RADIUS int = 12
+	MMI_EXTRACTION_ELLIPSE_RADIUS int = 8
 	MZI_N_NODES                   int = 64
 	MMI_N_NODES                   int = MZI_N_NODES * 3
 )
@@ -24,7 +28,7 @@ const (
 )
 
 var (
-	MZI_MMI_MAP [64][3][2]int = [64][3][2]int{
+	MZI_MMI_MAP [64][3][]int = [64][3][]int{
 		{{13, 14}, {15, 14}, {17, 14}}, // P0 (1) cba p
 		{{19, 14}, {21, 14}, {23, 14}}, // P1 (2) cba p
 		{{12, 15}, {14, 15}, {16, 15}}, // P2 (3) cba i
@@ -109,32 +113,74 @@ var (
 	}
 )
 
+func publishImage(topic string, mat gocv.Mat, mqttClient mqtt.Client) error {
+	// Publish image (jpg/base64)
+	imgBuf, err := gocv.IMEncode(gocv.JPEGFileExt, mat)
+	if err != nil {
+		return err
+	}
+	imgBytes := imgBuf.GetBytes()
+	var b64bytes []byte = make([]byte, base64.StdEncoding.EncodedLen(len(imgBytes)))
+	base64.StdEncoding.Encode(b64bytes, imgBytes)
+	mqttClient.Publish(topic, 2, false, b64bytes)
+	return err
+}
+
+func publishJsonMsg(topic string, obj interface{}, mqttClient mqtt.Client) error {
+	msg, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+	mqttClient.Publish(topic, 2, false, msg)
+	return err
+}
+
 func MainLoop() error {
+
+	mqttClient := NewMQTTClient()
+
 	r := bufio.NewReader(os.Stdin)
+	// capture, err := gocv.OpenVideoCapture("tcp://127.0.0.1:8888")
+	// if err != nil {
+	// 	panic(err)
+	// }
 	t := time.Now()
 
 	w := CAMERA_FRAME_WIDTH
 	h := CAMERA_FRAME_HEIGHT
 
 	var grid [MMI_N_NODES]GridNode
-	// var firstMZIs [MZI_N_NODES]float64
+	var firstMZIs [MZI_N_NODES]float64
 	var previousMZIs [MZI_N_NODES]float64
+	var unwindedMZIs [MZI_N_NODES]float64
+	var Ks [MZI_N_NODES]int
 
 	var gridAcquired bool
-	// var firstMZIsAcquired bool
+	var firstMZIsAcquired bool
 
-	f, err := os.Create("mzis.csv")
-	if err != nil {
-		panic(err)
-	}
-	csvW := csv.NewWriter(f)
+	// mzif, err := os.Create("mzis.csv")
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// defer mzif.Close()
+
+	// csvWMZI := csv.NewWriter(mzif)
+
+	// mmif, err := os.Create("mmis.csv")
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// defer mmif.Close()
+	// csvWMMI := csv.NewWriter(mmif)
 
 	// NV12 (YUV4:2:0) camera bayer grid format is composed of 1 luma plane and
 	// 1/2 chroma plane
 	// http://www.chiark.greenend.org.uk/doc/linux-doc-3.16/html/media_api/re29.html
 
 	buf := make([]byte, w*h+w*h/2)
+
 	for i := 0; ; i++ {
+		ts := time.Now()
 		_, err := io.ReadFull(r, buf)
 		if err != nil {
 			return err
@@ -152,32 +198,98 @@ func MainLoop() error {
 		}
 		defer mat.Close()
 
+		gocv.Threshold(mat, &mat, 15, 256, gocv.ThresholdToZero)
+
 		if !gridAcquired {
 			detectedGridNodes := DetectGridNodes(mat)
 			grid = ComputeGrid(detectedGridNodes)
+			for i, node := range grid {
+				if node.X == 0 && node.Y == 0 {
+					log.Fatalf("missing node: %d", i)
+				}
+			}
+			SaveSpotsgrid(grid)
 			gridAcquired = true
 		}
 
 		MMIs := ExtractMMIs(mat, grid)
 		MZIs := ExtractMZIs(MMIs, grid)
 
+		if !firstMZIsAcquired {
+			firstMZIs = MZIs
+			previousMZIs = MZIs
+			firstMZIsAcquired = true
+			continue
+		}
+
+		for i := range MZIs {
+			dv := MZIs[i] - previousMZIs[i]
+			if math.Abs(dv) > math.Pi {
+				if dv < 0 {
+					Ks[i]++
+				} else {
+					Ks[i]--
+				}
+			}
+		}
+
+		for i := range MZIs {
+			unwindedMZIs[i] = MZIs[i] + 2*math.Pi*float64(Ks[i])
+		}
+
 		previousMZIs = MZIs
 
 		var MZIShifts [MZI_N_NODES]float64
-		for i, mzi := range MZIs {
-			MZIShifts[i] = mzi - previousMZIs[i]
+		for i, mzi := range unwindedMZIs {
+			MZIShifts[i] = mzi - firstMZIs[i]
 		}
 
-		WriteMZIsCSV(csvW, MZIShifts)
+		var meanMZIAcc float64
+		for _, mzi := range MZIShifts {
+			meanMZIAcc += mzi
+		}
 
-		return err
+		// Publish MZISfifts Frame
+		mziShiftsFrame := Frame{
+			I:         i,
+			Timestamp: int(ts.UnixMilli()),
+			Values:    MZIShifts[:],
+		}
+		publishJsonMsg("fspdriver/frames/mzi", mziShiftsFrame, mqttClient)
+
+		// Publish MMIs Frame
+		mmiFrame := Frame{
+			I:         i,
+			Timestamp: int(ts.UnixMilli()),
+			Values:    MMIs[:],
+		}
+		publishJsonMsg("fspdriver/frames/mmi", mmiFrame, mqttClient)
+
+		// publishImage("fspdriver/images/raw", mat, mqttClient)
+
+		if i%30 == 0 {
+			log.Println(i, meanMZIAcc/float64(len(MZIs)))
+			drawingMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
+			defer drawingMat.Close()
+			mat.CopyTo(&drawingMat)
+			gocv.CvtColor(drawingMat, &drawingMat, gocv.ColorGrayToBGR)
+
+			DrawSpotsgridDebug(drawingMat, grid)
+			publishImage("fspdriver/images/drawing", drawingMat, mqttClient)
+			publishImage("fspdriver/images/raw", mat, mqttClient)
+			drawingMat.Close()
+
+		}
+		mat.Close()
+		log.Println(gocv.MatProfile.Count())
 	}
 }
 
-func WriteMZIsCSV(csvW *csv.Writer, MZIs [MZI_N_NODES]float64) {
-	var MZIStrings [MZI_N_NODES]string
-	for i, mzi := range MZIs {
-		MZIStrings[i] = fmt.Sprint(mzi)
+func WriteCSV(csvW *csv.Writer, values []float64) {
+	var valuesStrings []string = make([]string, len(values))
+	for i, mzi := range values {
+		valuesStrings[i] = fmt.Sprint(mzi)
 	}
-	csvW.Write(MZIStrings[:])
+	csvW.Write(valuesStrings)
+	csvW.Flush()
 }

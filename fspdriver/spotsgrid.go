@@ -19,7 +19,7 @@ const (
 	NODE_DETECTION_DOT_SIZE            int     = 5
 	NODE_DETECTION_MIN_CONTOUR_AREA    float64 = 5
 	NODE_DETECTION_MAX_CONTOUR_AREA    float64 = 200
-	NODE_DETECTION_THRESHOLD_OFFSET_FR float64 = 0.15
+	NODE_DETECTION_THRESHOLD_OFFSET_FR float64 = 0.1
 )
 
 func computeBorders(a []float64) []float64 {
@@ -139,11 +139,17 @@ func pivot(x int, y int, pivotPointX int, pivotPointY int, angleRad float64) (in
 	return pivotedX, pivotedY
 }
 
-func DrawSpotsgridMZIMap(mat *gocv.Mat, grid []GridNode) {
-	for _, node := range grid {
+func DrawSpotsgridDebug(mat gocv.Mat, grid [MMI_N_NODES]GridNode) {
 
-		gocv.Ellipse(mat, image.Pt(node.X, node.Y), image.Pt(MMI_EXTRACTION_ELLIPSE_RADIUS, MMI_EXTRACTION_ELLIPSE_RADIUS), 0, 0, 360, color.RGBA{R: 255, G: 0, B: 255, A: 255}, 1)
-
+	for nodeI, node := range grid {
+		gocv.Ellipse(
+			&mat,
+			image.Pt(node.X, node.Y),
+			image.Pt(MMI_EXTRACTION_ELLIPSE_RADIUS, MMI_EXTRACTION_ELLIPSE_RADIUS),
+			0, 0, 360,
+			color.RGBA{R: 255, G: 0, B: 255, A: 255},
+			1,
+		)
 		var mziIdx int
 		var mmiL int
 	LoopMZI:
@@ -156,45 +162,30 @@ func DrawSpotsgridMZIMap(mat *gocv.Mat, grid []GridNode) {
 				}
 			}
 		}
+		mziRow := mziIdx / 4
+		mziCol := mziIdx % 4
+		mziRowStr := string("PONMLKJIHGFEDCBA"[mziRow])
 
 		gocv.PutText(
-			mat,
-			fmt.Sprintf("%d%s", mziIdx, [3]string{"a", "b", "c"}[mmiL]),
-			image.Pt(node.X+5, node.Y-5),
+			&mat,
+			fmt.Sprintf("%d[%d:%d]", nodeI, node.Row, node.Col),
+			image.Pt(node.X+2, node.Y-4),
 			gocv.FontHersheyPlain,
+			0.7,
+			color.RGBA{R: 255, G: 255, B: 0, A: 255},
 			1,
-			color.RGBA{R: 255, G: 127, B: 255, A: 255},
+		)
+		gocv.PutText(
+			&mat,
+			fmt.Sprintf("[%s%d]%d%s", mziRowStr, mziCol, mziIdx, [3]string{"a", "b", "c"}[mmiL]),
+			image.Pt(node.X+2, node.Y+4),
+			gocv.FontHersheyPlain,
+			0.7,
+			color.RGBA{R: 255, G: 255, B: 0, A: 255},
 			1,
 		)
 	}
-	// if ok := gocv.IMWrite(filepath.Join("compute", "mat_grid_mzi.bmp"), secondMat); !ok {
-	// 	panic("imwrite nok")
-	// }
 }
-
-// func DrawSpotsgridDebug(mat *gocv.Mat, gri []GridNode) {
-
-// 	actualMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
-// 	defer actualMat.Close()
-// 	gocv.CvtColor(mat, &actualMat, gocv.ColorBGRToGray)
-// 	actualMat.SubtractUChar(15)
-
-// 	secondMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC3)
-// 	defer secondMat.Close()
-// 	mat.CopyTo(&secondMat)
-
-// 	for _, detectedGridNode := range grid {
-// 		gocv.Ellipse(&mat, image.Pt(detectedGridNode.X, detectedGridNode.Y), image.Pt(10, 10), 0, 0, 360, color.RGBA{R: 255, G: 255, B: 255, A: 255}, 1)
-// 	}
-
-// 	for _, pivotedGridNode := range pivotedGridNodes {
-// 		gocv.Ellipse(&mat, image.Pt(pivotedGridNode.X, pivotedGridNode.Y), image.Pt(5, 5), 0, 0, 360, color.RGBA{R: 0, G: 255, B: 0, A: 255}, 1)
-// 	}
-
-// 	if ok := gocv.IMWrite(filepath.Join("compute", "mat_withellipsesAnd_pivoted_ellipses.bmp"), mat); !ok {
-// 		panic("imwrite nok")
-// 	}
-// }
 
 func ComputeGrid(detectedGridNodes []GridNode) [MMI_N_NODES]GridNode {
 
@@ -297,36 +288,82 @@ func ComputeGrid(detectedGridNodes []GridNode) [MMI_N_NODES]GridNode {
 
 func DetectGridNodes(mat gocv.Mat) []GridNode {
 
-	thresholdedMatchResult := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
-	defer thresholdedMatchResult.Close()
-
-	// gocv.AdaptiveThreshold(mat, &matchResult, 256, gocv.AdaptiveThresholdMean, gocv.ThresholdBinaryInv, 3, 0)
-	gocv.Threshold(mat, &thresholdedMatchResult, 127, 255, gocv.ThresholdBinary)
-
-	if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result.bmp"), thresholdedMatchResult); !ok {
+	if ok := gocv.IMWrite(filepath.Join("compute", "original.bmp"), mat); !ok {
 		panic("imwrite nok")
 	}
 
-	gocv.MorphologyEx(
-		thresholdedMatchResult,
-		&thresholdedMatchResult,
-		gocv.MorphOpen,
+	_min, _max, _, _ := gocv.MinMaxLoc(mat)
+	log.Println("Mat min/max: ", _min, _max)
+
+	dilatedMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
+	defer dilatedMat.Close()
+
+	gocv.Dilate(
+		mat,
+		&dilatedMat,
 		gocv.GetStructuringElement(gocv.MorphRect, image.Pt(3, 3)),
 	)
 
-	if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result_opened.bmp"), thresholdedMatchResult); !ok {
+	if ok := gocv.IMWrite(filepath.Join("compute", "dilated_mat.bmp"), dilatedMat); !ok {
 		panic("imwrite nok")
 	}
 
+	compareMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
+	defer compareMat.Close()
+
+	gocv.Compare(mat, dilatedMat, &compareMat, gocv.CompareGE)
+	gocv.BitwiseNot(compareMat, &compareMat)
+	// gocv.MorphologyEx(compareMat, &compareMat, gocv.MorphClose,
+	// 	gocv.GetStructuringElement(gocv.MorphRect, image.Pt(3, 3)),
+	// )
+	// gocv.Erode(
+	// 	compareMat, &compareMat,
+	// 	gocv.GetStructuringElement(gocv.MorphRect, image.Pt(3, 3)),
+	// )
+
+	if ok := gocv.IMWrite(filepath.Join("compute", "compare_mat.bmp"), compareMat); !ok {
+		panic("imwrite nok")
+	}
+
+	// thresholdedMatchResult := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
+	// defer thresholdedMatchResult.Close()
+
+	// // gocv.AdaptiveThreshold(mat, &matchResult, 256, gocv.AdaptiveThresholdMean, gocv.ThresholdBinaryInv, 3, 0)
+	// gocv.Threshold(mat, &thresholdedMatchResult, 75, 255, gocv.ThresholdBinary)
+
+	// if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result.bmp"), thresholdedMatchResult); !ok {
+	// 	panic("imwrite nok")
+	// }
+
+	// gocv.MorphologyEx(
+	// 	thresholdedMatchResult,
+	// 	&thresholdedMatchResult,
+	// 	gocv.MorphOpen,
+	// 	gocv.GetStructuringElement(gocv.MorphRect, image.Pt(3, 3)),
+	// )
+	// gocv.Dilate(
+	// 	thresholdedMatchResult,
+	// 	&thresholdedMatchResult,
+	// 	gocv.GetStructuringElement(gocv.MorphRect, image.Pt(3, 3)),
+	// )
+
+	// if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result_opened.bmp"), thresholdedMatchResult); !ok {
+	// 	panic("imwrite nok")
+	// }
+
 	// Detect Contours
-	contours := gocv.FindContours(thresholdedMatchResult, gocv.RetrievalTree, gocv.ChainApproxSimple)
+	contours := gocv.FindContours(compareMat, gocv.RetrievalTree, gocv.ChainApproxSimple)
 	log.Printf("Found %d contours", contours.Size())
+
+	if contours.Size() < 100 {
+		log.Fatalln("not enough contours detected: %d", contours.Size())
+	}
 
 	gridNodes := make([]GridNode, 0)
 
 	thresholdedMatchResultWithEllipses := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
 	defer thresholdedMatchResultWithEllipses.Close()
-	thresholdedMatchResult.CopyTo(&thresholdedMatchResultWithEllipses)
+	compareMat.CopyTo(&thresholdedMatchResultWithEllipses)
 	gocv.CvtColor(thresholdedMatchResultWithEllipses, &thresholdedMatchResultWithEllipses, gocv.ColorGrayToBGRA)
 
 	var j int
@@ -363,7 +400,7 @@ func DetectGridNodes(mat gocv.Mat) []GridNode {
 
 	for i, gridNode := range gridNodes {
 		// log.Printf("Ellipse %d; Position: %v", i, ellipse.Center)
-		gocv.Ellipse(&thresholdedMatchResultWithEllipses, image.Pt(gridNode.X, gridNode.Y), image.Pt(10, 10), 0, 0, 360, color.RGBA{R: 0, G: 0, B: 255, A: 127}, 2)
+		gocv.Ellipse(&thresholdedMatchResultWithEllipses, image.Pt(gridNode.X, gridNode.Y), image.Pt(MMI_EXTRACTION_ELLIPSE_RADIUS, MMI_EXTRACTION_ELLIPSE_RADIUS), 0, 0, 360, color.RGBA{R: 0, G: 0, B: 255, A: 127}, 2)
 		gocv.PutText(
 			&thresholdedMatchResultWithEllipses,
 			fmt.Sprint(i),
@@ -379,10 +416,13 @@ func DetectGridNodes(mat gocv.Mat) []GridNode {
 		panic("imwrite nok")
 	}
 
+	for _, gridNode := range gridNodes {
+		log.Println(gridNode.X, gridNode.Y)
+	}
 	return gridNodes
 }
 
-func SaveSpotsgrid(grid []GridNode) {
+func SaveSpotsgrid(grid [MMI_N_NODES]GridNode) {
 	// f, err := os.Create(fmt.Sprintf("%d.spotsgrid.csv", time.Now().UnixMilli()))
 	f, err := os.Create("spotsgrid.csv")
 	if err != nil {
