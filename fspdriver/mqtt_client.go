@@ -19,11 +19,14 @@
 package fspdriver
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"gocv.io/x/gocv"
 )
 
 var f mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
@@ -50,4 +53,26 @@ func NewMQTTClient() mqtt.Client {
 	}
 
 	return c
+}
+
+func publishImage(topic string, mat gocv.Mat, mqttClient mqtt.Client) error {
+	// Publish image (jpg/base64)
+	imgBuf, err := gocv.IMEncode(gocv.JPEGFileExt, mat)
+	if err != nil {
+		return err
+	}
+	imgBytes := imgBuf.GetBytes()
+	var b64bytes []byte = make([]byte, base64.StdEncoding.EncodedLen(len(imgBytes)))
+	base64.StdEncoding.Encode(b64bytes, imgBytes)
+	mqttClient.Publish(topic, 2, false, b64bytes)
+	return err
+}
+
+func publishJsonMsg(topic string, obj interface{}, mqttClient mqtt.Client) error {
+	msg, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+	mqttClient.Publish(topic, 2, false, msg)
+	return err
 }

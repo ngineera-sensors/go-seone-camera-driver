@@ -2,9 +2,7 @@ package fspdriver
 
 import (
 	"bufio"
-	"encoding/base64"
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -12,7 +10,6 @@ import (
 	"os"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"gocv.io/x/gocv"
 )
 
@@ -113,38 +110,12 @@ var (
 	}
 )
 
-func publishImage(topic string, mat gocv.Mat, mqttClient mqtt.Client) error {
-	// Publish image (jpg/base64)
-	imgBuf, err := gocv.IMEncode(gocv.JPEGFileExt, mat)
-	if err != nil {
-		return err
-	}
-	imgBytes := imgBuf.GetBytes()
-	var b64bytes []byte = make([]byte, base64.StdEncoding.EncodedLen(len(imgBytes)))
-	base64.StdEncoding.Encode(b64bytes, imgBytes)
-	mqttClient.Publish(topic, 2, false, b64bytes)
-	return err
-}
-
-func publishJsonMsg(topic string, obj interface{}, mqttClient mqtt.Client) error {
-	msg, err := json.Marshal(obj)
-	if err != nil {
-		return err
-	}
-	mqttClient.Publish(topic, 2, false, msg)
-	return err
-}
-
 func MainLoop() error {
 
 	mqttClient := NewMQTTClient()
 
 	r := bufio.NewReader(os.Stdin)
-	// capture, err := gocv.OpenVideoCapture("tcp://127.0.0.1:8888")
-	// if err != nil {
-	// 	panic(err)
-	// }
-	t := time.Now()
+	t0 := time.Now()
 
 	w := CAMERA_FRAME_WIDTH
 	h := CAMERA_FRAME_HEIGHT
@@ -180,14 +151,14 @@ func MainLoop() error {
 	buf := make([]byte, w*h+w*h/2)
 
 	for i := 0; ; i++ {
-		ts := time.Now()
+		ts := int((time.Since(t0)).Milliseconds())
 		_, err := io.ReadFull(r, buf)
 		if err != nil {
 			return err
 		}
 		if i == 0 {
-			log.Printf("Time until first frame arrived: %.3f", float64(time.Since(t).Microseconds())/1e3)
-			t = time.Now()
+			log.Printf("Time until first frame arrived: %.3f", float64(time.Since(t0).Microseconds())/1e3)
+			t0 = time.Now()
 		}
 		if i < 3 {
 			continue
@@ -252,7 +223,7 @@ func MainLoop() error {
 		// Publish MZISfifts Frame
 		mziShiftsFrame := Frame{
 			I:         i,
-			Timestamp: int(ts.UnixMilli()),
+			Timestamp: ts,
 			Values:    MZIShifts[:],
 		}
 		publishJsonMsg("fspdriver/frames/mzi", mziShiftsFrame, mqttClient)
@@ -260,7 +231,7 @@ func MainLoop() error {
 		// Publish MMIs Frame
 		mmiFrame := Frame{
 			I:         i,
-			Timestamp: int(ts.UnixMilli()),
+			Timestamp: ts,
 			Values:    MMIs[:],
 		}
 		publishJsonMsg("fspdriver/frames/mmi", mmiFrame, mqttClient)
