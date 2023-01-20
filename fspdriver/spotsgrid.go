@@ -153,7 +153,7 @@ func DrawSpotsgridDebug(mat gocv.Mat, grid [MMI_N_NODES]GridNode) {
 		var mziIdx int
 		var mmiL int
 	LoopMZI:
-		for i, mzi := range MZI_MMI_MAP {
+		for i, mzi := range MZI_MMI_GRID_MAP {
 			for l, mmi := range mzi {
 				if node.Row == mmi[0] && node.Col == mmi[1] {
 					mziIdx = i

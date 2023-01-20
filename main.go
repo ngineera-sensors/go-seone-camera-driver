@@ -1,11 +1,13 @@
 package main
 
 import (
+	"log"
+
 	"go.neose-fsp-camera.gocv-driver/fspdriver"
 )
 
 func main() {
-	fspdriver.MainLoop()
+	log.Fatal(fspdriver.MainLoop())
 
 	// // Read image from disk
 	// mat := gocv.IMRead(filepath.Join("compute", "original.bmp"), gocv.IMReadGrayScale)

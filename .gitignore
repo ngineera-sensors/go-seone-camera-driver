@@ -1,6 +1,7 @@
-*.jpg
-*.bmp
+config/*
+compute/*
+*.bin
 *.txt
 *.csv
-
+*.bmp
 go.neose-fsp-camera.gocv-driver

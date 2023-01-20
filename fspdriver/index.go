@@ -25,7 +25,9 @@ const (
 )
 
 var (
-	MZI_MMI_MAP [64][3][]int = [64][3][]int{
+	// MZI to MMI as of physical layout
+	// See dye documentation for details
+	MZI_MMI_GRID_MAP [64][3][]int = [64][3][]int{
 		{{13, 14}, {15, 14}, {17, 14}}, // P0 (1) cba p
 		{{19, 14}, {21, 14}, {23, 14}}, // P1 (2) cba p
 		{{12, 15}, {14, 15}, {16, 15}}, // P2 (3) cba i
@@ -108,11 +110,112 @@ var (
 		{{5, 14}, {3, 14}, {1, 14}},  // A2 (63) abc i
 		{{11, 14}, {9, 14}, {7, 14}}, // A3 (64) abc i
 	}
+
+	// Indexing: col-major, with interlacing rows
+	// 12 - number of interlaced rows
+	// row is int-divided by 2 because
+	// the MZI_MMI_MAP uses deinterlaced row indexing
+	//
+	// To convert grid to flat index:
+	// aIdx := a[1]*12 + a[0]/2
+	// bIdx := b[1]*12 + b[0]/2
+	// cIdx := c[1]*12 + c[0]/2
+	MZI_MMI_INDICES_MAP = [64][3]int{
+		{174, 175, 176},
+		{177, 178, 179},
+		{186, 187, 188},
+		{189, 190, 191},
+		{152, 151, 150},
+		{155, 154, 153},
+		{164, 163, 162},
+		{167, 166, 165},
+		{126, 127, 128},
+		{129, 130, 131},
+		{138, 139, 140},
+		{141, 142, 143},
+		{104, 103, 102},
+		{107, 106, 105},
+		{116, 115, 114},
+		{119, 118, 117},
+		{78, 79, 80},
+		{81, 82, 83},
+		{90, 91, 92},
+		{93, 94, 95},
+		{56, 55, 54},
+		{59, 58, 57},
+		{68, 67, 66},
+		{71, 70, 69},
+		{30, 31, 32},
+		{33, 34, 35},
+		{42, 43, 44},
+		{45, 46, 47},
+		{8, 7, 6},
+		{11, 10, 9},
+		{20, 19, 18},
+		{23, 22, 21},
+		{12, 13, 14},
+		{15, 16, 17},
+		{0, 1, 2},
+		{3, 4, 5},
+		{38, 37, 36},
+		{41, 40, 39},
+		{26, 25, 24},
+		{29, 28, 27},
+		{60, 61, 62},
+		{63, 64, 65},
+		{48, 49, 50},
+		{51, 52, 53},
+		{86, 85, 84},
+		{89, 88, 87},
+		{74, 73, 72},
+		{77, 76, 75},
+		{108, 109, 110},
+		{111, 112, 113},
+		{96, 97, 98},
+		{99, 100, 101},
+		{134, 133, 132},
+		{137, 136, 135},
+		{122, 121, 120},
+		{125, 124, 123},
+		{156, 157, 158},
+		{159, 160, 161},
+		{144, 145, 146},
+		{147, 148, 149},
+		{182, 181, 180},
+		{185, 184, 183},
+		{170, 169, 168},
+		{173, 172, 171},
+	}
 )
+
+// var (
+// 	SEONE_SN = ""
+// )
+
+// func init() {
+// 	sn, err := os.ReadFile(filepath.Join("config", "serialnumber.txt"))
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	if len(sn) != 0 {
+// 		log.Printf("Setting SEONE_SN value: %s", string(sn))
+// 	}
+// 	snStr := string(sn)
+// 	snStr = strings.TrimSpace(snStr)
+// 	SEONE_SN = snStr
+// }
 
 func MainLoop() error {
 
-	mqttClient := NewMQTTClient()
+	// mqttClient, err := NewMQTTClient()
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	// f, err := os.Open("2023-01-10-18-08-raw-video.bin")
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
 
 	r := bufio.NewReader(os.Stdin)
 	t0 := time.Now()
@@ -148,11 +251,13 @@ func MainLoop() error {
 	// 1/2 chroma plane
 	// http://www.chiark.greenend.org.uk/doc/linux-doc-3.16/html/media_api/re29.html
 
-	buf := make([]byte, w*h+w*h/2)
+	fullBuf := make([]byte, w*h+w*h/2)
 
+	previousPublishTs := time.Now()
 	for i := 0; ; i++ {
-		ts := int((time.Since(t0)).Milliseconds())
-		_, err := io.ReadFull(r, buf)
+		// time.Sleep(33 * time.Millisecond) // Simulate 30 FPS framerate
+		// ts := int((time.Since(t0)).Milliseconds())
+		_, err := io.ReadFull(r, fullBuf)
 		if err != nil {
 			return err
 		}
@@ -163,15 +268,17 @@ func MainLoop() error {
 		if i < 3 {
 			continue
 		}
-		mat, err := gocv.NewMatFromBytes(h, w, gocv.MatTypeCV8UC1, buf[:w*h])
-		if err != nil {
-			return err
-		}
-		defer mat.Close()
 
-		gocv.Threshold(mat, &mat, 15, 256, gocv.ThresholdToZero)
+		buf := fullBuf[:w*h]
+
+		// Subtract "dark frame"
+		// gocv.Threshold(mat, &mat, 15, 256, gocv.ThresholdToZero)
 
 		if !gridAcquired {
+			mat, err := gocv.NewMatFromBytes(h, w, gocv.MatTypeCV8UC1, buf)
+			if err != nil {
+				return err
+			}
 			detectedGridNodes := DetectGridNodes(mat)
 			grid = ComputeGrid(detectedGridNodes)
 			for i, node := range grid {
@@ -181,10 +288,14 @@ func MainLoop() error {
 			}
 			SaveSpotsgrid(grid)
 			gridAcquired = true
+			mat.Close()
 		}
 
-		MMIs := ExtractMMIs(mat, grid)
-		MZIs := ExtractMZIs(MMIs, grid)
+		// MMIs := ExtractMMIs(mat, grid)
+
+		MMIs := ExtractMMIsBuffer(buf, grid)
+		// MZIs := ExtractMZIs(MMIs, grid)
+		MZIs := ExtractMZIsIndexed(MMIs, grid)
 
 		if !firstMZIsAcquired {
 			firstMZIs = MZIs
@@ -220,39 +331,49 @@ func MainLoop() error {
 			meanMZIAcc += mzi
 		}
 
-		// Publish MZISfifts Frame
-		mziShiftsFrame := Frame{
-			I:         i,
-			Timestamp: ts,
-			Values:    MZIShifts[:],
+		if time.Since(previousPublishTs).Milliseconds() < 333 {
+			continue
 		}
-		publishJsonMsg("fspdriver/frames/mzi", mziShiftsFrame, mqttClient)
+		previousPublishTs = time.Now()
 
-		// Publish MMIs Frame
-		mmiFrame := Frame{
-			I:         i,
-			Timestamp: ts,
-			Values:    MMIs[:],
-		}
-		publishJsonMsg("fspdriver/frames/mmi", mmiFrame, mqttClient)
+		log.Println(i, meanMZIAcc/float64(len(MZIs)))
+
+		// WriteCSV(csvWMMI, MMIs[:])
+		// WriteCSV(csvWMZI, MZIShifts[:])
+
+		// // Publish MZISfifts Frame
+		// mziShiftsFrame := Frame{
+		// 	I:         i,
+		// 	Timestamp: ts,
+		// 	Values:    MZIShifts[:],
+		// }
+		// publishJsonMsg("fspdriver/frames/mzi", mziShiftsFrame, mqttClient)
+
+		// // Publish MMIs Frame
+		// mmiFrame := Frame{
+		// 	I:         i,
+		// 	Timestamp: ts,
+		// 	Values:    MMIs[:],
+		// }
+		// publishJsonMsg("fspdriver/frames/mmi", mmiFrame, mqttClient)
 
 		// publishImage("fspdriver/images/raw", mat, mqttClient)
 
-		if i%30 == 0 {
-			log.Println(i, meanMZIAcc/float64(len(MZIs)))
-			drawingMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
-			defer drawingMat.Close()
-			mat.CopyTo(&drawingMat)
-			gocv.CvtColor(drawingMat, &drawingMat, gocv.ColorGrayToBGR)
+		// if i%30 == 0 {
 
-			DrawSpotsgridDebug(drawingMat, grid)
-			publishImage("fspdriver/images/drawing", drawingMat, mqttClient)
-			publishImage("fspdriver/images/raw", mat, mqttClient)
-			drawingMat.Close()
+		// 	drawingMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
+		// 	defer drawingMat.Close()
+		// 	mat.CopyTo(&drawingMat)
+		// 	gocv.CvtColor(drawingMat, &drawingMat, gocv.ColorGrayToBGR)
 
-		}
-		mat.Close()
-		log.Println(gocv.MatProfile.Count())
+		// 	DrawSpotsgridDebug(drawingMat, grid)
+		// 	publishImage("fspdriver/images/drawing", drawingMat, mqttClient)
+		// 	publishImage("fspdriver/images/raw", mat, mqttClient)
+		// 	drawingMat.Close()
+
+		// }
+
+		// log.Println(gocv.MatProfile.Count())
 	}
 }
 

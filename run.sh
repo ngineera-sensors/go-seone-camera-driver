@@ -7,7 +7,7 @@ libcamera-raw \
 	 --flush 1 \
 	--save-pts timestamps.txt \
 	-t 0 \
-	--shutter 20 \
+	--shutter 800 \
 	--gain 1 \
 	--ev 0 \
 	--denoise off \

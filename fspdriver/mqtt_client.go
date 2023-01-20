@@ -1,27 +1,10 @@
-/*
- * Copyright (c) 2021 IBM Corp and others.
- *
- * All rights reserved. This program and the accompanying materials
- * are made available under the terms of the Eclipse Public License v2.0
- * and Eclipse Distribution License v1.0 which accompany this distribution.
- *
- * The Eclipse Public License is available at
- *    https://www.eclipse.org/legal/epl-2.0/
- * and the Eclipse Distribution License is available at
- *   http://www.eclipse.org/org/documents/edl-v10.php.
- *
- * Contributors:
- *    Seth Hoenig
- *    Allan Stockdill-Mander
- *    Mike Robertson
- */
-
 package fspdriver
 
 import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -29,30 +12,73 @@ import (
 	"gocv.io/x/gocv"
 )
 
+var (
+	MQTT_SCHEME   = "tcp"
+	MQTT_HOST     = ""
+	MQTT_PORT     = "1883"
+	MQTT_USERNAME = ""
+	MQTT_PASSWORD = ""
+)
+
 var f mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
 	fmt.Printf("TOPIC: %s\n", msg.Topic())
 	fmt.Printf("MSG: %s\n", msg.Payload())
 }
 
-func NewMQTTClient() mqtt.Client {
-	// mqtt.DEBUG = log.New(os.Stdout, "", 0)
-	// mqtt.ERROR = log.New(os.Stdout, "", 0)
-	opts := mqtt.NewClientOptions().AddBroker("tcp://192.168.1.57:1883").SetClientID("gotrivial")
-	opts.SetKeepAlive(2 * time.Second)
-	opts.SetDefaultPublishHandler(f)
-	opts.SetPingTimeout(1 * time.Second)
+func init() {
+	mqttScheme := os.Getenv("MQTT_SCHEME")
+	if mqttScheme != "" {
+		log.Printf("Setting MQTT_SCHEME value provided in MQTT_SCHEME env variable : %s", mqttScheme)
+		MQTT_SCHEME = mqttScheme
+	}
+	mqttHost := os.Getenv("MQTT_HOST")
+	if mqttHost != "" {
+		log.Printf("Setting MQTT_HOST value provided in MQTT_HOST env variable : %s", mqttHost)
+		MQTT_HOST = mqttHost
+	}
+	if MQTT_HOST == "" {
+		log.Fatalf("MQTT_HOST is not defined neither by default nor manually. Exiting.")
+	}
+	mqttPort := os.Getenv("MQTT_PORT")
+	if mqttPort != "" {
+		log.Printf("Setting MQTT_PORT value provided in MQTT_PORT env variable : %s", mqttPort)
+		MQTT_PORT = mqttPort
+	}
+	mqttUsername := os.Getenv("MQTT_USERNAME")
+	if mqttUsername != "" {
+		log.Println("Setting MQTT_USERNAME value provided in MQTT_USERNAME env variable : ***")
+		MQTT_USERNAME = mqttUsername
+	}
+	mqttPassword := os.Getenv("MQTT_PASSWORD")
+	if mqttPassword != "" {
+		log.Println("Setting MQTT_PASSWORD value provided in MQTT_PASSWORD env variable : ***")
+		MQTT_PASSWORD = mqttPassword
+	}
+}
+
+func NewMQTTClient() (mqtt.Client, error) {
+	var err error
+
+	mqttBrokerUri := fmt.Sprintf("%s://%s:%s", MQTT_SCHEME, MQTT_HOST, MQTT_PORT)
+	// mqttClientID := fmt.Sprintf("seone_%s", SEONE_SN)
+	mqttClientID := "gotrivial"
+
+	log.Printf("Connecting to MQTT Broker: %s. ClientID: %s", mqttBrokerUri, mqttClientID)
+
+	opts := mqtt.
+		NewClientOptions().
+		AddBroker(mqttBrokerUri).
+		SetClientID(mqttClientID).
+		SetUsername(MQTT_USERNAME).
+		SetPassword(MQTT_PASSWORD)
+	opts.SetPingTimeout(3 * time.Second)
 
 	c := mqtt.NewClient(opts)
 	if token := c.Connect(); token.Wait() && token.Error() != nil {
-		panic(token.Error())
+		return c, token.Error()
 	}
 
-	if token := c.Subscribe("go-mqtt/sample", 0, nil); token.Wait() && token.Error() != nil {
-		fmt.Println(token.Error())
-		os.Exit(1)
-	}
-
-	return c
+	return c, err
 }
 
 func publishImage(topic string, mat gocv.Mat, mqttClient mqtt.Client) error {
