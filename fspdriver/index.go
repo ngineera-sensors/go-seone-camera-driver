@@ -27,7 +27,7 @@ import (
 // 	SEONE_SN = snStr
 // }
 
-func MainLoop(grid [MMI_N_NODES]GridNode, out io.ReadCloser) error {
+func MainLoop(grid [MMI_N_NODES]GridNode, darkValue byte, out io.ReadCloser) error {
 
 	// mqttClient, err := NewMQTTClient()
 	// if err != nil {
@@ -87,7 +87,7 @@ func MainLoop(grid [MMI_N_NODES]GridNode, out io.ReadCloser) error {
 
 		buf := fullBuf[:w*h]
 
-		MMIs := ExtractMMIsBuffer(buf, grid)
+		MMIs := ExtractMMIsBuffer(buf, grid, darkValue)
 		MZIs := ExtractMZIsIndexed(MMIs, grid)
 
 		if !firstMZIsAcquired {

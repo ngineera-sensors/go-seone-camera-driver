@@ -3,6 +3,9 @@ package main
 import (
 	"log"
 	"math"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"go.neose-fsp-camera.gocv-driver/fspdriver"
 	"gocv.io/x/gocv"
@@ -20,7 +23,19 @@ func startCameraAndSampleMaxValue(cameraShutter int) (int, error) {
 	var max int
 
 	cmd, out := fspdriver.StartCamera(30, cameraShutter)
-	defer cmd.Process.Kill()
+	defer func() {
+		log.Println("Killing camera..")
+		err = cmd.Process.Kill()
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println("Waiting camera..")
+		state, err := cmd.Process.Wait()
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println("Camera state after killing and waiting: ", state.String())
+	}()
 
 	mat, err := fspdriver.SampleCamera(out)
 	if err != nil {
@@ -63,7 +78,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	_, out := fspdriver.StartCamera(fspdriver.CAMERA_FRAMERATE, optimalCameraShutter)
+	cancelChan := make(chan os.Signal, 1)
+	signal.Notify(cancelChan, syscall.SIGTERM, syscall.SIGINT)
+
+	cmd, out := fspdriver.StartCamera(fspdriver.CAMERA_FRAMERATE, optimalCameraShutter)
 
 	mat, err := fspdriver.SampleCamera(out)
 	if err != nil {
@@ -73,15 +91,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fspdriver.SaveSpotsgrid(grid)
 
-	hist := gocv.NewMatWithSize(1, 256, gocv.MatTypeCV8UC1)
-	mask := gocv.Ones(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
-	gocv.CalcHist([]gocv.Mat{mat}, []int{0}, mask, &hist, []int{256}, []float64{0, 256}, false)
-
-	_, max, _, maxLoc := gocv.MinMaxLoc(hist)
-	log.Println("Histogram: ", max, maxLoc)
+	darkValue := fspdriver.CalibrateDarkValue(mat)
 
 	mat.Close()
-	log.Fatal(fspdriver.MainLoop(grid, out))
+	go fspdriver.MainLoop(grid, darkValue, out)
+	sig := <-cancelChan // Block until signal is received
+	log.Println("Received signal:", sig.String())
+	cmd.Process.Kill()
 }
