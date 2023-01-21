@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
@@ -26,10 +27,70 @@ var (
 	CAMERA_FRAMERATE = 30
 )
 
+const (
+	AEC_UPPER_BOUNDARY      = 3000
+	AEC_LOWER_BOUNDARY      = 100
+	AEC_MAX_VALUE_TARGET    = 150
+	AEC_MAX_VALUE_TOLERANCE = 5
+)
+
 func init() {
 	if cameraFramerate := os.Getenv("CAMERA_FRAMERATE"); cameraFramerate != "" {
 		log.Println("Setting CAMERA_FRAMERATE value provided in CAMERA_FRAMERATE env variable: ", CAMERA_FRAMERATE)
 		CAMERA_FRAMERATE, _ = strconv.Atoi(cameraFramerate)
+	}
+}
+
+func startCameraAndSampleMaxValue(cameraShutter int) (int, error) {
+	var err error
+	var max int
+
+	cmd, out := StartCamera(30, cameraShutter)
+	defer func() {
+		log.Println("Killing camera..")
+		err = cmd.Process.Kill()
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println("Waiting camera..")
+		state, err := cmd.Process.Wait()
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println("Camera state after killing and waiting: ", state.String())
+	}()
+
+	mat, err := SampleCamera(out)
+	if err != nil {
+		return max, err
+	}
+	_, maxF, _, _ := gocv.MinMaxIdx(mat)
+	max = int(maxF)
+	mat.Close()
+	return max, err
+}
+
+// CalibrateExposure performs a binary search on camera
+// image maxValue target CAMERA_IMAGE_MAX_VALUE_TARGET
+// with tolerance of CAMERA_IMAGE_MAX_VALUE_TOLERANCE
+func CalibrateExposure(lowerBoundary, upperBoundary int) (int, error) {
+	var err error
+
+	parameter := (lowerBoundary + upperBoundary) / 2
+
+	value, err := startCameraAndSampleMaxValue(parameter)
+	if err != nil {
+		return parameter, err
+	}
+	diff := math.Abs(float64(AEC_MAX_VALUE_TARGET - value))
+	log.Printf("ExposureCalibration. Parameter: %d, Value: %d; Diff: %.0f", parameter, value, diff)
+	if diff < AEC_MAX_VALUE_TOLERANCE {
+		return parameter, err
+	}
+	if value < AEC_MAX_VALUE_TARGET {
+		return CalibrateExposure(parameter, upperBoundary)
+	} else {
+		return CalibrateExposure(lowerBoundary, parameter)
 	}
 }
 
