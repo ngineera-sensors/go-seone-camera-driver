@@ -15,11 +15,26 @@ import (
 )
 
 const (
-	NODE_DETECTION_TEMPLATE_SIZE       int     = 15
-	NODE_DETECTION_DOT_SIZE            int     = 5
-	NODE_DETECTION_MIN_CONTOUR_AREA    float64 = 5
-	NODE_DETECTION_MAX_CONTOUR_AREA    float64 = 200
-	NODE_DETECTION_THRESHOLD_OFFSET_FR float64 = 0.1
+
+	// Discard contours which area is
+	// less than minimum
+	// and more than maximum
+	NODE_DETECTION_MIN_CONTOUR_AREA = 5
+	NODE_DETECTION_MAX_CONTOUR_AREA = 200
+
+	// Initial image dilation kernel size
+	NODE_DETECTION_DILATION_KERNEL_SIZE = 3
+
+	// Grid nodes detection relies on primary nodes being sorted
+	// in row-major, left-to-right manner
+	NODE_DETECTION_NODE_INTERLACE_GAP = 10
+
+	// Minimum number of contours to be detected before grid calculation
+	// 100 is a little bit more than half (192 MMIs in total)
+	NODE_DETECTION_MINIMUM_PRIMARY_CONTOURS = 100
+
+	NODE_DETECTION_COMMON_ANGLE_SEARCH_ARC_DEG  = 5
+	NODE_DETECTION_COMMON_ANGLE_SEARCH_STEP_DEG = 0.1
 )
 
 func computeBorders(a []float64) []float64 {
@@ -67,7 +82,11 @@ func computeBorders(a []float64) []float64 {
 	return bordersA
 }
 
-func computeCommonAngleRad(
+// findCommonAngleRad will linearly search
+// for the angle
+// at which the grid is pivoted on the image
+// TODO: implement bilateral minimum search instead of linear sweep
+func findCommonAngleRad(
 	aroundAngleRad float64,
 	angleToSweepRad float64,
 	angleStepRad float64,
@@ -77,11 +96,11 @@ func computeCommonAngleRad(
 	var angleStepsInt int = int(math.Round(angleToSweepRad / angleStepRad))
 	// These are what we search for
 	var commonAngleEnergy float64 = 0
-	for angleNb := -angleStepsInt; angleNb < angleStepsInt; angleNb++ {
-		var min float64 = 1e6  // init min variable as a very high one
-		var max float64 = -1e6 // init max variable as a very low one
+	for angleIdx := -angleStepsInt; angleIdx < angleStepsInt; angleIdx++ {
+		var min float64 = math.MaxFloat64  // init min variable as a very high one
+		var max float64 = -math.MaxFloat64 // init max variable as a very low one
 		// Define the theta
-		theta := aroundAngleRad + float64(angleNb)*angleStepRad
+		theta := aroundAngleRad + float64(angleIdx)*angleStepRad
 		var rs []float64
 		for _, gridNode := range gridNodes {
 			// Calculate r as a function of just defined theta
@@ -92,7 +111,7 @@ func computeCommonAngleRad(
 			rs = append(rs, r)
 		}
 		step := (max - min) / 90 // divide into 90 bins // TODO: Optimize this hard-coded params
-		binWidth := step / 3     // Bins overlap 3 times one upon another (semi-sliding bin)
+		binWidth := step / 3     // Bins overlap 1/3 one upon another (semi-sliding bin)
 		var binEnergySum float64 = 0
 		// Calculte the enery of each bin
 		for bin := min; bin < max; bin += binWidth {
@@ -187,20 +206,20 @@ func DrawSpotsgridDebug(mat gocv.Mat, grid [MMI_N_NODES]GridNode) {
 	}
 }
 
-func ComputeGrid(detectedGridNodes []GridNode) [MMI_N_NODES]GridNode {
-
+func computeFullGrid(detectedGridNodes []GridNode) ([MMI_N_NODES]GridNode, error) {
+	var err error
 	var grid [MMI_N_NODES]GridNode
 
-	HorizontalAngleRad := computeCommonAngleRad(
-		0,
-		deg2Rad(5),
-		deg2Rad(0.1),
+	HorizontalAngleRad := findCommonAngleRad(
+		0, // 0 for horizontal axis
+		deg2Rad(NODE_DETECTION_COMMON_ANGLE_SEARCH_ARC_DEG),
+		deg2Rad(NODE_DETECTION_COMMON_ANGLE_SEARCH_STEP_DEG),
 		detectedGridNodes,
 	)
-	VerticalAngleRad := computeCommonAngleRad(
-		math.Pi/2,
-		deg2Rad(5),
-		deg2Rad(0.1),
+	VerticalAngleRad := findCommonAngleRad(
+		math.Pi/2, // 90 for vertical axis
+		deg2Rad(NODE_DETECTION_COMMON_ANGLE_SEARCH_ARC_DEG),
+		deg2Rad(NODE_DETECTION_COMMON_ANGLE_SEARCH_STEP_DEG),
 		detectedGridNodes,
 	)
 
@@ -208,10 +227,10 @@ func ComputeGrid(detectedGridNodes []GridNode) [MMI_N_NODES]GridNode {
 	backwardEffectiveAngleRad := -forwardEffectiveAngleRad
 	log.Printf("Grid's horizontal angle: %.2f; Grid's vertical angle: %.2f. Effective Angle: %.2f", rad2Deg(HorizontalAngleRad), rad2Deg(VerticalAngleRad), rad2Deg(forwardEffectiveAngleRad))
 
-	var minX float64 = 1e6
-	var maxX float64 = -1e6
-	var minY float64 = 1e6
-	var maxY float64 = -1e6
+	var minX float64 = math.MaxFloat64
+	var maxX float64 = -math.MaxFloat64
+	var minY float64 = math.MaxFloat64
+	var maxY float64 = -math.MaxFloat64
 
 	for _, gridNode := range detectedGridNodes {
 		minX = math.Min(minX, float64(gridNode.X))
@@ -283,17 +302,20 @@ func ComputeGrid(detectedGridNodes []GridNode) [MMI_N_NODES]GridNode {
 			n++
 		}
 	}
-	return grid
+	return grid, err
 }
 
-func DetectGridNodes(mat gocv.Mat) []GridNode {
+func detectPrimaryGridNodes(mat gocv.Mat) ([]GridNode, error) {
+
+	var err error
+	gridNodes := make([]GridNode, 0)
 
 	if ok := gocv.IMWrite(filepath.Join("compute", "original.bmp"), mat); !ok {
-		panic("imwrite nok")
+		log.Println("DetectPrimaryGridNodes: original.bmp imwrite nok")
 	}
 
 	_min, _max, _, _ := gocv.MinMaxLoc(mat)
-	log.Println("Mat min/max: ", _min, _max)
+	log.Println("DetectPrimaryGridNodes: mat min/max: ", _min, _max)
 
 	dilatedMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
 	defer dilatedMat.Close()
@@ -301,11 +323,11 @@ func DetectGridNodes(mat gocv.Mat) []GridNode {
 	gocv.Dilate(
 		mat,
 		&dilatedMat,
-		gocv.GetStructuringElement(gocv.MorphRect, image.Pt(3, 3)),
+		gocv.GetStructuringElement(gocv.MorphRect, image.Pt(NODE_DETECTION_DILATION_KERNEL_SIZE, NODE_DETECTION_DILATION_KERNEL_SIZE)),
 	)
 
 	if ok := gocv.IMWrite(filepath.Join("compute", "dilated_mat.bmp"), dilatedMat); !ok {
-		panic("imwrite nok")
+		log.Println("DetectPrimaryGridNodes: dilated_mat.bmp imwrite nok")
 	}
 
 	compareMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
@@ -313,53 +335,19 @@ func DetectGridNodes(mat gocv.Mat) []GridNode {
 
 	gocv.Compare(mat, dilatedMat, &compareMat, gocv.CompareGE)
 	gocv.BitwiseNot(compareMat, &compareMat)
-	// gocv.MorphologyEx(compareMat, &compareMat, gocv.MorphClose,
-	// 	gocv.GetStructuringElement(gocv.MorphRect, image.Pt(3, 3)),
-	// )
-	// gocv.Erode(
-	// 	compareMat, &compareMat,
-	// 	gocv.GetStructuringElement(gocv.MorphRect, image.Pt(3, 3)),
-	// )
 
 	if ok := gocv.IMWrite(filepath.Join("compute", "compare_mat.bmp"), compareMat); !ok {
-		panic("imwrite nok")
+		log.Println("DetectPrimaryGridNodes: compare_mat.bmp imwrite nok")
 	}
-
-	// thresholdedMatchResult := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
-	// defer thresholdedMatchResult.Close()
-
-	// // gocv.AdaptiveThreshold(mat, &matchResult, 256, gocv.AdaptiveThresholdMean, gocv.ThresholdBinaryInv, 3, 0)
-	// gocv.Threshold(mat, &thresholdedMatchResult, 75, 255, gocv.ThresholdBinary)
-
-	// if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result.bmp"), thresholdedMatchResult); !ok {
-	// 	panic("imwrite nok")
-	// }
-
-	// gocv.MorphologyEx(
-	// 	thresholdedMatchResult,
-	// 	&thresholdedMatchResult,
-	// 	gocv.MorphOpen,
-	// 	gocv.GetStructuringElement(gocv.MorphRect, image.Pt(3, 3)),
-	// )
-	// gocv.Dilate(
-	// 	thresholdedMatchResult,
-	// 	&thresholdedMatchResult,
-	// 	gocv.GetStructuringElement(gocv.MorphRect, image.Pt(3, 3)),
-	// )
-
-	// if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result_opened.bmp"), thresholdedMatchResult); !ok {
-	// 	panic("imwrite nok")
-	// }
 
 	// Detect Contours
 	contours := gocv.FindContours(compareMat, gocv.RetrievalTree, gocv.ChainApproxSimple)
 	log.Printf("Found %d contours", contours.Size())
 
-	if contours.Size() < 100 {
-		log.Fatalln("not enough contours detected: %d", contours.Size())
+	if contours.Size() < NODE_DETECTION_MINIMUM_PRIMARY_CONTOURS {
+		err = fmt.Errorf("not enough contours detected: %d", contours.Size())
+		return gridNodes, err
 	}
-
-	gridNodes := make([]GridNode, 0)
 
 	thresholdedMatchResultWithEllipses := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
 	defer thresholdedMatchResultWithEllipses.Close()
@@ -389,9 +377,7 @@ func DetectGridNodes(mat gocv.Mat) []GridNode {
 		node1 := gridNodes[i]
 		node2 := gridNodes[j]
 
-		//TODO: magic number "10"  should reflect matcher template size
-
-		if node2.X < node1.X-10 || node2.X > node1.X+10 {
+		if node2.X < node1.X-NODE_DETECTION_NODE_INTERLACE_GAP || node2.X > node1.X+NODE_DETECTION_NODE_INTERLACE_GAP {
 			return node1.X < node2.X
 		} else {
 			return node1.Y < node2.Y
@@ -413,13 +399,20 @@ func DetectGridNodes(mat gocv.Mat) []GridNode {
 	}
 
 	if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result_with_detected_ellipses.bmp"), thresholdedMatchResultWithEllipses); !ok {
-		panic("imwrite nok")
+		log.Println("DetectPrimaryGridNodes: thresholded_matching_result_with_detected_ellipses.bmp imwrite nok")
 	}
+	return gridNodes, err
+}
 
-	for _, gridNode := range gridNodes {
-		log.Println(gridNode.X, gridNode.Y)
+func CalibrateSpotsGrid(mat gocv.Mat) ([MMI_N_NODES]GridNode, error) {
+	var err error
+	var gridNodes [MMI_N_NODES]GridNode
+
+	primaryGridNodes, err := detectPrimaryGridNodes(mat)
+	if err != nil {
+		return gridNodes, err
 	}
-	return gridNodes
+	return computeFullGrid(primaryGridNodes)
 }
 
 func SaveSpotsgrid(grid [MMI_N_NODES]GridNode) {
@@ -430,6 +423,7 @@ func SaveSpotsgrid(grid [MMI_N_NODES]GridNode) {
 	}
 	defer f.Close()
 	csvW := csv.NewWriter(f)
+	csvW.Write([]string{"row", "col", "x", "y"})
 	for _, node := range grid {
 		csvW.Write([]string{
 			fmt.Sprint(node.Row),
