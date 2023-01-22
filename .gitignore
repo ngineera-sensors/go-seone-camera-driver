@@ -5,3 +5,4 @@ compute/*
 *.csv
 *.bmp
 go.neose-fsp-camera.gocv-driver
+set-env.sh
