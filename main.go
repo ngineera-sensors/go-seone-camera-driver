@@ -2,41 +2,26 @@ package main
 
 import (
 	"log"
-	"os"
-	"os/signal"
-	"syscall"
+	"time"
 
 	"go.neose-fsp-camera.gocv-driver/fspdriver"
 )
 
 func main() {
+	var stateChan chan fspdriver.CameraState = make(chan fspdriver.CameraState, 1)
+	var imageTriggerChan chan bool = make(chan bool, 1)
 
-	optimalCameraShutter, err := fspdriver.CalibrateExposure(fspdriver.AEC_LOWER_BOUNDARY, fspdriver.AEC_UPPER_BOUNDARY)
+	client, err := fspdriver.NewMQTTClient()
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Println("MQTT Client: ", client.IsConnected())
 
-	cancelChan := make(chan os.Signal, 1)
-	signal.Notify(cancelChan, syscall.SIGTERM, syscall.SIGINT)
+	fspdriver.SetupMQTTSubscriptionCallbacks(stateChan, imageTriggerChan, client)
 
-	cmd, out := fspdriver.StartCamera(fspdriver.CAMERA_FRAMERATE, optimalCameraShutter)
+	go fspdriver.CameraPipeAndLoop(stateChan, imageTriggerChan, client)
 
-	mat, err := fspdriver.SampleCamera(out)
-	if err != nil {
-		log.Fatal(err)
+	for {
+		time.Sleep(1 * time.Second)
 	}
-	grid, err := fspdriver.CalibrateSpotsGrid(mat)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	darkValue := fspdriver.CalibrateDarkValue(mat)
-
-	mat.Close()
-	go fspdriver.MainLoop(grid, darkValue, out)
-
-	sig := <-cancelChan // Block until signal is received
-	log.Println("Received signal:", sig.String())
-	cmd.Process.Kill()
-	cmd.Process.Wait()
 }

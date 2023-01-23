@@ -37,6 +37,10 @@ const (
 	NODE_DETECTION_COMMON_ANGLE_SEARCH_STEP_DEG = 0.1
 )
 
+var (
+	NODE_DETECTION_EFFECTIVE_GRID [MMI_N_NODES]GridNode
+)
+
 func computeBorders(a []float64) []float64 {
 	// log.Println("Computing borders. Initial elements:", len(a))
 
@@ -412,7 +416,12 @@ func CalibrateSpotsGrid(mat gocv.Mat) ([MMI_N_NODES]GridNode, error) {
 	if err != nil {
 		return gridNodes, err
 	}
-	return computeFullGrid(primaryGridNodes)
+	gridNodes, err = computeFullGrid(primaryGridNodes)
+	if err != nil {
+		return gridNodes, err
+	}
+	NODE_DETECTION_EFFECTIVE_GRID = gridNodes
+	return gridNodes, err
 }
 
 func SaveSpotsgrid(grid [MMI_N_NODES]GridNode) {

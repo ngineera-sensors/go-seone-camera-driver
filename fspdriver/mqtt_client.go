@@ -9,16 +9,24 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/google/uuid"
 	"gocv.io/x/gocv"
 )
 
 var (
 	MQTT_SCHEME   = "tcp"
-	MQTT_HOST     = ""
+	MQTT_HOST     = "localhost"
 	MQTT_PORT     = "1883"
 	MQTT_USERNAME = ""
 	MQTT_PASSWORD = ""
+
+	DEFAULT_QOS byte = 2
 )
+
+type MQTTResponse struct {
+	Message interface{}
+	Error   string
+}
 
 var f mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
 	fmt.Printf("TOPIC: %s\n", msg.Topic())
@@ -61,7 +69,7 @@ func NewMQTTClient() (mqtt.Client, error) {
 
 	mqttBrokerUri := fmt.Sprintf("%s://%s:%s", MQTT_SCHEME, MQTT_HOST, MQTT_PORT)
 	// mqttClientID := fmt.Sprintf("seone_%s", SEONE_SN)
-	mqttClientID := "gotrivial"
+	mqttClientID := uuid.New().String()
 
 	log.Printf("Connecting to MQTT Broker: %s. ClientID: %s", mqttBrokerUri, mqttClientID)
 
@@ -81,7 +89,7 @@ func NewMQTTClient() (mqtt.Client, error) {
 	return c, err
 }
 
-func publishImage(topic string, mat gocv.Mat, mqttClient mqtt.Client) error {
+func PublishImage(topic string, mat gocv.Mat, mqttClient mqtt.Client) error {
 	// Publish image (jpg/base64)
 	imgBuf, err := gocv.IMEncode(gocv.JPEGFileExt, mat)
 	if err != nil {
@@ -90,15 +98,15 @@ func publishImage(topic string, mat gocv.Mat, mqttClient mqtt.Client) error {
 	imgBytes := imgBuf.GetBytes()
 	var b64bytes []byte = make([]byte, base64.StdEncoding.EncodedLen(len(imgBytes)))
 	base64.StdEncoding.Encode(b64bytes, imgBytes)
-	mqttClient.Publish(topic, 2, false, b64bytes)
+	mqttClient.Publish(topic, DEFAULT_QOS, false, b64bytes)
 	return err
 }
 
-func publishJsonMsg(topic string, obj interface{}, mqttClient mqtt.Client) error {
+func PublishJsonMsg(topic string, obj interface{}, mqttClient mqtt.Client) error {
 	msg, err := json.Marshal(obj)
 	if err != nil {
 		return err
 	}
-	mqttClient.Publish(topic, 2, false, msg)
+	mqttClient.Publish(topic, DEFAULT_QOS, false, msg)
 	return err
 }

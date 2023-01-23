@@ -6,3 +6,7 @@ compute/*
 *.bmp
 go.neose-fsp-camera.gocv-driver
 set-env.sh
+
+*.bin
+lib*
+include*
