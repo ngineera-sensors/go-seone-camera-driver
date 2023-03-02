@@ -6,12 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -19,63 +16,14 @@ import (
 	"gocv.io/x/gocv"
 )
 
-const (
-	CAMERA_GET_STATE_MQTT_TOPIC_PATH    = "/camera/state/get"
-	CAMERA_GET_STATE_CB_MQTT_TOPIC_PATH = "/camera/state/get/cb"
-
-	CAMERA_SET_STATE_MQTT_TOPIC_PATH    = "/camera/state/set"
-	CAMERA_SET_STATE_CB_MQTT_TOPIC_PATH = "/camera/state/set/cb"
-
-	CAMERA_GET_FRAMERATE_MQTT_TOPIC_PATH    = "/camera/framerate/get"
-	CAMERA_GET_FRAMERATE_CB_MQTT_TOPIC_PATH = "/camera/framerate/get/cb"
-
-	CAMERA_SET_FRAMERATE_MQTT_TOPIC_PATH    = "/camera/framerate/set"
-	CAMERA_SET_FRAMERATE_CB_MQTT_TOPIC_PATH = "/camera/framerate/set/cb"
-
-	CAMERA_GET_CALIBRATION_MQTT_TOPIC_PATH    = "/camera/calibration/get"
-	CAMERA_GET_CALIBRATION_CB_MQTT_TOPIC_PATH = "/camera/calibration/get/cb"
-
-	// CAMERA_PERFORM_CALIBRATION_MQTT_TOPIC_PATH = "/camera/perform_calibration"
-	// CAMERA_PERFORM_CALIBRATION_CB_MQTT_TOPIC_PATH = "/camera/perform_calibration/cb"
-
-	CAMERA_GET_IMAGE_MQTT_TOPIC_PATH    = "/camera/get_image"
-	CAMERA_GET_IMAGE_CB_MQTT_TOPIC_PATH = "/camera/get_image/cb"
-
-	CAMERA_GET_DRAWING_MQTT_TOPIC_PATH    = "/camera/get_drawing"
-	CAMERA_GET_DRAWING_CB_MQTT_TOPIC_PATH = "/camera/get_drawing/cb"
-
-	CAMERA_MMI_BROADCAST_MQTT_TOPIC_PATH = "/camera/mmi/broadcast"
-	CAMERA_MZI_BROADCAST_MQTT_TOPIC_PATH = "/camera/mzi/broadcast"
-)
-
-var (
-	SEONE_SN = ""
-)
-
-func init() {
-	sn, err := os.ReadFile(filepath.Join("config", "serialnumber.txt"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	if len(sn) != 0 {
-		log.Printf("Setting SEONE_SN value: %s", string(sn))
-	}
-	snStr := string(sn)
-	snStr = strings.TrimSpace(snStr)
-	SEONE_SN = snStr
-	if SEONE_SN == "" {
-		log.Fatal("Could not get seone's SN, exiting..")
-	}
-}
-
 func CameraPipeAndLoop(stateChan chan CameraState, imageTriggerChan chan bool, client mqtt.Client) error {
-	initialParameter := AEC_EFFECTIVE_SHUTTER_SPEED
-	if initialParameter == 0 {
-		initialParameter = (AEC_LOWER_BOUNDARY + AEC_UPPER_BOUNDARY) / 2
-	}
-	_, err := CalibrateExposure(AEC_LOWER_BOUNDARY, initialParameter, AEC_UPPER_BOUNDARY, 0)
+
+	err := CalibrateExposure()
 	if err != nil {
-		log.Fatal(err)
+		ERRORLogger.Fatal(err)
+	}
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Printf("AEC completed. ShutterSpeed: %d, MaxValue: %d", AEC_EFFECTIVE_SHUTTER_SPEED, AEC_EFFECTIVE_MAX_VALUE)
 	}
 
 	signalChan := make(chan os.Signal, 1)
@@ -84,11 +32,11 @@ func CameraPipeAndLoop(stateChan chan CameraState, imageTriggerChan chan bool, c
 	cmd, stdoutReader := StartCamera(CAMERA_FRAMERATE_MUT, AEC_EFFECTIVE_SHUTTER_SPEED)
 	mat, err := SampleCamera(stdoutReader)
 	if err != nil {
-		log.Fatal(err)
+		ERRORLogger.Fatal(err)
 	}
 	_, err = CalibrateSpotsGrid(mat)
 	if err != nil {
-		log.Fatal(err)
+		ERRORLogger.Fatal(err)
 	}
 
 	CalibrateDarkValue(mat)
@@ -99,19 +47,25 @@ func CameraPipeAndLoop(stateChan chan CameraState, imageTriggerChan chan bool, c
 
 	select {
 	case sig := <-signalChan: // Block until signal is received
-		log.Println("Received signal:", sig.String())
+		if LOG_LEVEL <= WARNING_LEVEL {
+			WARNINGLogger.Println("Received SIGNAL:", sig.String())
+		}
 		StopCamera(cmd)
 		os.Exit(0)
 
 	case state := <-stateChan:
 		if state == 0 {
-			log.Println("Received OFF state")
+			if LOG_LEVEL <= INFO_LEVEL {
+				INFOLogger.Println("Received OFF state")
+			}
 			StopCamera(cmd)
 			signal.Stop(signalChan)
 			break
 		}
 	}
-	log.Println("Exiting CameraPipeAndLoop..")
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Println("Exiting CameraPipeAndLoop..")
+	}
 	return err
 }
 
@@ -126,7 +80,9 @@ func GetCameraStateHandler(client mqtt.Client, msg mqtt.Message) {
 	}
 	err = PublishJsonMsg(respTopic, respObj, client)
 	if err != nil {
-		log.Printf("Error occurred in GetCameraStateHandler MQTT CB: %s", err.Error())
+		if LOG_LEVEL <= ERROR_LEVEL {
+			ERRORLogger.Printf("Error occurred in GetCameraStateHandler MQTT CB: %s", err.Error())
+		}
 	}
 }
 
@@ -140,24 +96,29 @@ func SetCameraStateHandler(stateChan chan CameraState, imageTriggerChan chan boo
 		var state CameraStateMessage
 		err = json.Unmarshal(payload, &state)
 		if err != nil {
-			log.Printf("Error occurred in SetCameraFramerateHandler MQTT CB while unmarshalling the JSON message: %s", err.Error())
+			if LOG_LEVEL <= ERROR_LEVEL {
+				ERRORLogger.Printf("Error occurred in SetCameraFramerateHandler MQTT CB while unmarshalling the JSON message: %s", err.Error())
+			}
 		}
-		log.Printf("Setting CAMERA_STATE to %d", state.State)
+		if LOG_LEVEL <= INFO_LEVEL {
+			INFOLogger.Printf("Setting CAMERA_STATE to %d", state.State)
+		}
 
 		switch state.State {
 
 		case 0:
 			stateChan <- 0
-			break
 		case 1:
 			if CAMERA_STATE_MUT != 0 {
-				log.Println("Received SET_STATE=1 but camera is already in running state. ignoring..")
-				break
+				if LOG_LEVEL <= WARNING_LEVEL {
+					WARNINGLogger.Println("Received SET_STATE=1 but camera is already in running state. Ignoring..")
+				}
 			}
 			go CameraPipeAndLoop(stateChan, imageTriggerChan, client)
-			break
 		default:
-			log.Printf("Received invalid State value for CAMERA_STATE: %d. Must be either 0 either 1.", state.State)
+			if LOG_LEVEL <= WARNING_LEVEL {
+				WARNINGLogger.Printf("Received invalid State value for CAMERA_STATE: %d. Must be either 0 either 1.", state.State)
+			}
 			return
 		}
 
@@ -168,7 +129,9 @@ func SetCameraStateHandler(stateChan chan CameraState, imageTriggerChan chan boo
 		}
 		err = PublishJsonMsg(respTopic, respObj, client)
 		if err != nil {
-			log.Printf("Error occurred in SetCameraFramerateHandler MQTT CB: %s", err.Error())
+			if LOG_LEVEL <= ERROR_LEVEL {
+				ERRORLogger.Printf("Error occurred in SetCameraFramerateHandler MQTT CB: %s", err.Error())
+			}
 		}
 	}
 	return f
@@ -185,7 +148,9 @@ func GetCameraFramerateHandler(client mqtt.Client, msg mqtt.Message) {
 	}
 	err = PublishJsonMsg(respTopic, respObj, client)
 	if err != nil {
-		log.Printf("Error occurred in GetCameraFramerateHandler MQTT CB: %s", err.Error())
+		if LOG_LEVEL <= ERROR_LEVEL {
+			ERRORLogger.Printf("Error occurred in GetCameraFramerateHandler MQTT CB: %s", err.Error())
+		}
 	}
 }
 
@@ -199,9 +164,14 @@ func SetCameraFramerateHandler(stateChan chan CameraState, imageTriggerChan chan
 		var framerate CameraFramerateMessage
 		err = json.Unmarshal(payload, &framerate)
 		if err != nil {
-			log.Printf("Error occurred in SetCameraFramerateHandler MQTT CB while unmarshalling the JSON message: %s", err.Error())
+			if LOG_LEVEL <= ERROR_LEVEL {
+				ERRORLogger.Printf("Error occurred in SetCameraFramerateHandler MQTT CB while unmarshalling the JSON message: %s", err.Error())
+			}
 		}
-		log.Printf("Setting CAMERA_FRAMERATE to %d", framerate.Framerate)
+		
+		if LOG_LEVEL <= INFO_LEVEL {
+			INFOLogger.Printf("Setting CAMERA_FRAMERATE to %d", framerate.Framerate)
+		}
 
 		CAMERA_FRAMERATE_MUT = framerate.Framerate
 
@@ -215,7 +185,9 @@ func SetCameraFramerateHandler(stateChan chan CameraState, imageTriggerChan chan
 		}
 		err = PublishJsonMsg(respTopic, respObj, client)
 		if err != nil {
-			log.Printf("Error occurred in SetCameraFramerateHandler MQTT CB: %s", err.Error())
+			if LOG_LEVEL <= ERROR_LEVEL {
+				ERRORLogger.Printf("Error occurred in SetCameraFramerateHandler MQTT CB: %s", err.Error())
+			}
 		}
 	}
 	return f
@@ -236,7 +208,9 @@ func GetCalibrationHandler(client mqtt.Client, msg mqtt.Message) {
 	}
 	err = PublishJsonMsg(respTopic, respObj, client)
 	if err != nil {
-		log.Printf("Error occurred in GetCalibrationHandler MQTT CB: %s", err.Error())
+		if LOG_LEVEL <= ERROR_LEVEL {
+			ERRORLogger.Printf("Error occurred in GetCalibrationHandler MQTT CB: %s", err.Error())
+		}
 	}
 }
 
@@ -253,31 +227,43 @@ func SetupMQTTSubscriptionCallbacks(stateChan chan CameraState, imageTriggerChan
 
 	// State
 	topic = getFullTopicString(CAMERA_GET_STATE_MQTT_TOPIC_PATH)
-	log.Printf("Subscribing to Camera GET_STATE: %s", topic)
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Printf("Subscribing to Camera GET_STATE: %s", topic)
+	}
 	client.Subscribe(topic, DEFAULT_QOS, GetCameraStateHandler)
 
 	topic = getFullTopicString(CAMERA_SET_STATE_MQTT_TOPIC_PATH)
-	log.Printf("Subscribing to Camera SET_STATE: %s", topic)
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Printf("Subscribing to Camera SET_STATE: %s", topic)
+	}
 	client.Subscribe(topic, DEFAULT_QOS, SetCameraStateHandler(stateChan, imageTriggerChan))
 
 	// Framerate
 	topic = getFullTopicString(CAMERA_GET_FRAMERATE_MQTT_TOPIC_PATH)
-	log.Printf("Subscribing to Camera GET_FRAMERATE: %s", topic)
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Printf("Subscribing to Camera GET_FRAMERATE: %s", topic)
+	}
 	client.Subscribe(topic, DEFAULT_QOS, GetCameraFramerateHandler)
 
 	topic = getFullTopicString(CAMERA_SET_FRAMERATE_MQTT_TOPIC_PATH)
-	log.Printf("Subscribing to Camera SET_FRAMERATE: %s", topic)
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Printf("Subscribing to Camera SET_FRAMERATE: %s", topic)
+	}
 	client.Subscribe(topic, DEFAULT_QOS, SetCameraFramerateHandler(stateChan, imageTriggerChan))
 
 	// Calibration
 	topic = getFullTopicString(CAMERA_GET_CALIBRATION_MQTT_TOPIC_PATH)
-	log.Printf("Subscribing to Camera GET_CALIBRATION: %s", topic)
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Printf("Subscribing to Camera GET_CALIBRATION: %s", topic)
+	}
 	client.Subscribe(topic, DEFAULT_QOS, GetCalibrationHandler)
 	// Calibration is performed on each SET_CAMERA=1, no need to implement a separate command
 
 	// Image
 	topic = getFullTopicString(CAMERA_GET_IMAGE_MQTT_TOPIC_PATH)
-	log.Printf("Subscribing to Camera GET_IMAGE: %s", topic)
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Printf("Subscribing to Camera GET_IMAGE: %s", topic)
+	}
 	client.Subscribe(topic, DEFAULT_QOS, GetImageHandler(stateChan, imageTriggerChan))
 
 }
@@ -321,15 +307,20 @@ func MainLoop(client mqtt.Client, reader io.ReadCloser, imageTriggerChan chan bo
 
 	fullBuf := make([]byte, w*h+w*h/2)
 
-	previousPublishTs := time.Now()
+	MZIShiftsAccumulatorTs := time.Now()
+
+	var MZIShiftsAccumulator [MZI_N_NODES]float64
+	var MZIShiftsAccumulatorCount int
+
 	for i := 0; ; i++ {
-		// ts := int((time.Since(t0)).Milliseconds())
 		_, err := io.ReadFull(r, fullBuf)
 		if err != nil {
 			return err
 		}
 		if i == 0 {
-			log.Printf("Time until first frame arrived: %.3f", float64(time.Since(t0).Microseconds())/1e3)
+			if LOG_LEVEL <= INFO_LEVEL {
+				INFOLogger.Printf("Time until first frame arrived: %s", time.Since(t0).String())
+			}
 			t0 = time.Now()
 		}
 
@@ -367,17 +358,43 @@ func MainLoop(client mqtt.Client, reader io.ReadCloser, imageTriggerChan chan bo
 			MZIShifts[i] = mzi - firstMZIs[i]
 		}
 
-		var meanMZIAcc float64
-		for _, mzi := range MZIShifts {
-			meanMZIAcc += mzi
+		durationSinceLastMZIShiftsBuffer := time.Since(MZIShiftsAccumulatorTs)
+		// Accumulate MZI values during bufferred period
+		if LOG_LEVEL <= DEBUG_LEVEL {
+			DEBUGLogger.Println("Accumulating master", durationSinceLastMZIShiftsBuffer.String())
 		}
-
-		if time.Since(previousPublishTs).Milliseconds() < 333 {
+		for i, mziValue := range MZIShifts {
+			MZIShiftsAccumulator[i] += mziValue
+		}
+		MZIShiftsAccumulatorCount++
+		if durationSinceLastMZIShiftsBuffer.Milliseconds() < int64(1000/MZI_EXTRACTION_FRAMERATE_MUT)-int64(1000/CAMERA_FRAMERATE_MUT) {
 			continue
 		}
-		previousPublishTs = time.Now()
+		// Calculate the master (mean) mzi shifts
+		// accumulated during the bufferred period
+		var MZIShiftsMaster [MMI_N_NODES]float64
+		for i, mziValue := range MZIShiftsAccumulator {
+			MZIShiftsMaster[i] = mziValue / float64(MZIShiftsAccumulatorCount)
+		}
 
-		log.Println(i, meanMZIAcc/float64(len(MZIs)))
+		var globalMeanMZIAcc float64
+		for _, mzi := range MZIShiftsMaster {
+			globalMeanMZIAcc += mzi
+		}
+		globalMeanMaster := globalMeanMZIAcc / float64(len(MZIs))
+		if LOG_LEVEL <= DEBUG_LEVEL {
+			DEBUGLogger.Printf("I: %d; Global mean: %.2f; Accumulated %d in %s; Effective MMI FPS: %.2f",
+				i, globalMeanMaster, MZIShiftsAccumulatorCount, durationSinceLastMZIShiftsBuffer.String(),
+				float64(MZIShiftsAccumulatorCount)/(float64(durationSinceLastMZIShiftsBuffer.Milliseconds())/1e3),
+			)
+		}
+
+		// Reset the accumulator and the counter
+		MZIShiftsAccumulatorTs = time.Now()
+		MZIShiftsAccumulatorCount = 0
+		for i := range MZIShiftsAccumulator {
+			MZIShiftsAccumulator[i] = 0
+		}
 
 		// WriteCSV(csvWMMI, MMIs[:])
 		// WriteCSV(csvWMZI, MZIShifts[:])
@@ -392,7 +409,9 @@ func MainLoop(client mqtt.Client, reader io.ReadCloser, imageTriggerChan chan bo
 		topicMZI := getFullTopicString(CAMERA_MZI_BROADCAST_MQTT_TOPIC_PATH)
 		err = PublishJsonMsg(topicMZI, mziShiftsFrame, client)
 		if err != nil {
-			log.Println(err)
+			if LOG_LEVEL <= ERROR_LEVEL {
+				ERRORLogger.Println(err)
+			}
 		}
 
 		// Publish MMIs Frame
@@ -404,7 +423,9 @@ func MainLoop(client mqtt.Client, reader io.ReadCloser, imageTriggerChan chan bo
 		topicMMI := getFullTopicString(CAMERA_MZI_BROADCAST_MQTT_TOPIC_PATH)
 		err = PublishJsonMsg(topicMMI, mmiFrame, client)
 		if err != nil {
-			log.Println(err)
+			if LOG_LEVEL <= ERROR_LEVEL {
+				ERRORLogger.Println(err)
+			}
 		}
 		select {
 		case <-imageTriggerChan:
@@ -412,14 +433,18 @@ func MainLoop(client mqtt.Client, reader io.ReadCloser, imageTriggerChan chan bo
 			topicImage := getFullTopicString(CAMERA_GET_IMAGE_CB_MQTT_TOPIC_PATH)
 			mat, err := gocv.NewMatFromBytes(h, w, gocv.MatTypeCV8UC1, buf)
 			if err != nil {
-				log.Println(err)
+				if LOG_LEVEL <= ERROR_LEVEL {
+					ERRORLogger.Println(err)
+				}
 				mat.Close()
 				break
 			}
 			err = PublishImage(topicImage, mat, client)
 			mat.Close()
 			if err != nil {
-				log.Println(err)
+				if LOG_LEVEL <= ERROR_LEVEL {
+					ERRORLogger.Println(err)
+				}
 			}
 
 			// Image with debug symbols ("drawing")
@@ -433,7 +458,9 @@ func MainLoop(client mqtt.Client, reader io.ReadCloser, imageTriggerChan chan bo
 			err = PublishImage(topicDrawing, drawingMat, client)
 			drawingMat.Close()
 			if err != nil {
-				log.Println(err)
+				if LOG_LEVEL <= ERROR_LEVEL {
+					ERRORLogger.Println(err)
+				}
 			}
 		default:
 			break

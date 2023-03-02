@@ -1,5 +1,11 @@
 package fspdriver
 
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
+
 const (
 	MZI_N_NODES int = 64
 	MMI_N_NODES int = MZI_N_NODES * 3
@@ -168,3 +174,57 @@ var (
 		{173, 172, 171},
 	}
 )
+
+
+const (
+	CAMERA_GET_STATE_MQTT_TOPIC_PATH    = "/camera/state/get"
+	CAMERA_GET_STATE_CB_MQTT_TOPIC_PATH = "/camera/state/get/cb"
+
+	CAMERA_SET_STATE_MQTT_TOPIC_PATH    = "/camera/state/set"
+	CAMERA_SET_STATE_CB_MQTT_TOPIC_PATH = "/camera/state/set/cb"
+
+	CAMERA_GET_FRAMERATE_MQTT_TOPIC_PATH    = "/camera/framerate/get"
+	CAMERA_GET_FRAMERATE_CB_MQTT_TOPIC_PATH = "/camera/framerate/get/cb"
+
+	CAMERA_SET_FRAMERATE_MQTT_TOPIC_PATH    = "/camera/framerate/set"
+	CAMERA_SET_FRAMERATE_CB_MQTT_TOPIC_PATH = "/camera/framerate/set/cb"
+
+	CAMERA_GET_CALIBRATION_MQTT_TOPIC_PATH    = "/camera/calibration/get"
+	CAMERA_GET_CALIBRATION_CB_MQTT_TOPIC_PATH = "/camera/calibration/get/cb"
+
+	// Calibration is performed each time CAMERA_STATE is turned from 0 to 1
+	// No need to implement these callbacks
+	// CAMERA_PERFORM_CALIBRATION_MQTT_TOPIC_PATH = "/camera/perform_calibration"
+	// CAMERA_PERFORM_CALIBRATION_CB_MQTT_TOPIC_PATH = "/camera/perform_calibration/cb"
+
+	CAMERA_GET_IMAGE_MQTT_TOPIC_PATH    = "/camera/get_image"
+	CAMERA_GET_IMAGE_CB_MQTT_TOPIC_PATH = "/camera/get_image/cb"
+
+	CAMERA_GET_DRAWING_MQTT_TOPIC_PATH    = "/camera/get_drawing"
+	CAMERA_GET_DRAWING_CB_MQTT_TOPIC_PATH = "/camera/get_drawing/cb"
+
+	CAMERA_MMI_BROADCAST_MQTT_TOPIC_PATH = "/camera/mmi/broadcast"
+	CAMERA_MZI_BROADCAST_MQTT_TOPIC_PATH = "/camera/mzi/broadcast"
+)
+
+var (
+	SEONE_SN = ""
+)
+
+func init() {
+	sn, err := os.ReadFile(filepath.Join("config", "serialnumber.txt"))
+	if err != nil {
+		ERRORLogger.Fatal(err)
+	}
+	if len(sn) != 0 {
+		if LOG_LEVEL <= INFO_LEVEL {
+			INFOLogger.Printf("Setting SEONE_SN value: %s", string(sn))
+		}
+	}
+	snStr := string(sn)
+	snStr = strings.TrimSpace(snStr)
+	SEONE_SN = snStr
+	if SEONE_SN == "" {
+		ERRORLogger.Fatal("Could not get seone's SN, exiting..")
+	}
+}

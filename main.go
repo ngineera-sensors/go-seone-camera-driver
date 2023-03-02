@@ -1,10 +1,9 @@
 package main
 
 import (
-	"log"
 	"time"
 
-	"go.neose-fsp-camera.gocv-driver/fspdriver"
+	"go-seone-camera-driver/fspdriver"
 )
 
 func main() {
@@ -13,9 +12,8 @@ func main() {
 
 	client, err := fspdriver.NewMQTTClient()
 	if err != nil {
-		log.Fatal(err)
+		fspdriver.ERRORLogger.Fatal(err)
 	}
-	log.Println("MQTT Client: ", client.IsConnected())
 
 	fspdriver.SetupMQTTSubscriptionCallbacks(stateChan, imageTriggerChan, client)
 

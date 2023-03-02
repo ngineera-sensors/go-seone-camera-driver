@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -32,19 +31,22 @@ const (
 )
 
 var (
-	CAMERA_STATE_MUT     CameraState = 0
-	CAMERA_FRAMERATE_MUT             = 30
-)
-
-var (
 	AEC_EFFECTIVE_MAX_VALUE          = 0
 	AEC_EFFECTIVE_SHUTTER_SPEED      = 0
 	AEC_EFFECTIVE_DARK_VALUE    byte = 0
 )
 
+var (
+	CAMERA_STATE_MUT             CameraState = 0
+	CAMERA_FRAMERATE_MUT                     = 10
+	MZI_EXTRACTION_FRAMERATE_MUT             = 3
+)
+
 func init() {
 	if cameraFramerate := os.Getenv("CAMERA_FRAMERATE"); cameraFramerate != "" {
-		log.Println("Setting CAMERA_FRAMERATE value provided in CAMERA_FRAMERATE env variable: ", CAMERA_FRAMERATE_MUT)
+		if LOG_LEVEL <= INFO_LEVEL {
+			INFOLogger.Println("Setting CAMERA_FRAMERATE value provided in CAMERA_FRAMERATE env variable: ", CAMERA_FRAMERATE_MUT)
+		}
 		CAMERA_FRAMERATE_MUT, _ = strconv.Atoi(cameraFramerate)
 	}
 }
@@ -57,7 +59,9 @@ func startCameraAndSampleMaxValue(cameraShutter int) (int, error) {
 	defer func() {
 		err = StopCamera(cmd)
 		if err != nil {
-			log.Println(err)
+			if LOG_LEVEL <= ERROR_LEVEL {
+				ERRORLogger.Println(err)
+			}
 		}
 	}()
 
@@ -74,11 +78,22 @@ func startCameraAndSampleMaxValue(cameraShutter int) (int, error) {
 // CalibrateExposure performs a binary search on camera
 // image maxValue target CAMERA_IMAGE_MAX_VALUE_TARGET
 // with tolerance of CAMERA_IMAGE_MAX_VALUE_TOLERANCE
-func CalibrateExposure(lowerBoundary, parameter, upperBoundary, i int) (int, error) {
+func CalibrateExposure() error {
+	initialParameter := AEC_EFFECTIVE_SHUTTER_SPEED
+	if initialParameter == 0 {
+		initialParameter = (AEC_LOWER_BOUNDARY + AEC_UPPER_BOUNDARY) / 2
+	}
+	_, err := exposureBinarySearch(AEC_LOWER_BOUNDARY, initialParameter, AEC_UPPER_BOUNDARY, 0)
+	return err
+}
+
+func exposureBinarySearch(lowerBoundary, parameter, upperBoundary, i int) (int, error) {
 	var err error
 
 	if i > AEC_MAX_NB_TRIALS {
-		log.Printf("ExposureCalibration: reached AEC_MAX_TRIES. Parameter: %d", parameter)
+		if LOG_LEVEL <= WARNING_LEVEL {
+			WARNINGLogger.Printf("ExposureCalibration: reached AEC_MAX_TRIES. ShutterSpeed: %d. MaxValue: %d", AEC_EFFECTIVE_SHUTTER_SPEED, AEC_EFFECTIVE_MAX_VALUE)
+		}
 		return parameter, err
 	}
 
@@ -86,18 +101,24 @@ func CalibrateExposure(lowerBoundary, parameter, upperBoundary, i int) (int, err
 	if err != nil {
 		return parameter, err
 	}
+
+	AEC_EFFECTIVE_MAX_VALUE = value
+	AEC_EFFECTIVE_SHUTTER_SPEED = parameter
+
 	diff := math.Abs(float64(AEC_MAX_VALUE_TARGET - value))
-	log.Printf("ExposureCalibration: parameter: %d, value: %d; diff: %.0f", parameter, value, diff)
+
+	if LOG_LEVEL <= DEBUG_LEVEL {
+		DEBUGLogger.Printf("ExposureCalibration: parameter: %d, value: %d; diff: %.0f", parameter, value, diff)
+	}
+
 	if diff < AEC_MAX_VALUE_TOLERANCE {
-		AEC_EFFECTIVE_MAX_VALUE = value
-		AEC_EFFECTIVE_SHUTTER_SPEED = parameter
 		return parameter, err
 	}
 	newParameter := (lowerBoundary + upperBoundary) / 2
 	if value < AEC_MAX_VALUE_TARGET {
-		return CalibrateExposure(parameter, newParameter, upperBoundary, i+1)
+		return exposureBinarySearch(parameter, newParameter, upperBoundary, i+1)
 	} else {
-		return CalibrateExposure(lowerBoundary, newParameter, parameter, i+1)
+		return exposureBinarySearch(lowerBoundary, newParameter, parameter, i+1)
 	}
 }
 
@@ -119,11 +140,11 @@ func StartCamera(cameraFramerate, cameraShutter int) (*exec.Cmd, io.ReadCloser) 
 	)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Fatal(err)
+		ERRORLogger.Fatal(err)
 	}
 	err = cmd.Start()
 	if err != nil {
-		log.Fatal(err)
+		ERRORLogger.Fatal(err)
 	}
 	CAMERA_STATE_MUT = 1
 	return cmd, out
@@ -174,7 +195,9 @@ func CalibrateDarkValue(mat gocv.Mat) byte {
 	gocv.CalcHist([]gocv.Mat{mat}, []int{0}, mask, &hist, []int{256}, []float64{0, 256}, false)
 
 	_, max, _, maxLoc := gocv.MinMaxLoc(hist)
-	log.Println("Histogram: ", max, maxLoc)
+	if LOG_LEVEL <= DEBUG_LEVEL {
+		DEBUGLogger.Printf("Histogram: max=%.1f, maxLoc=%#v", max, maxLoc)
+	}
 	darkValue = byte(maxLoc.Y)
 
 	AEC_EFFECTIVE_DARK_VALUE = darkValue
@@ -184,17 +207,27 @@ func CalibrateDarkValue(mat gocv.Mat) byte {
 
 func StopCamera(cmd *exec.Cmd) error {
 	var err error
-	log.Println("Killing camera..")
+	if LOG_LEVEL <= DEBUG_LEVEL {
+		DEBUGLogger.Println("Killing camera..")
+	}
 	err = cmd.Process.Kill()
 	if err != nil {
-		log.Println(err)
+		if LOG_LEVEL <= ERROR_LEVEL {
+			ERRORLogger.Println(err)
+		}
 	}
-	log.Println("Waiting camera..")
+	if LOG_LEVEL <= DEBUG_LEVEL {
+		DEBUGLogger.Println("Waiting camera..")
+	}
 	state, err := cmd.Process.Wait()
 	if err != nil {
-		log.Println(err)
+		if LOG_LEVEL <= DEBUG_LEVEL {
+			DEBUGLogger.Println(err)
+		}
 	}
-	log.Println("Camera state after killing and waiting: ", state.String())
+	if LOG_LEVEL <= DEBUG_LEVEL {
+		DEBUGLogger.Println("Camera state after killing and waiting: ", state.String())
+	}
 	CAMERA_STATE_MUT = 0
 	return err
 }

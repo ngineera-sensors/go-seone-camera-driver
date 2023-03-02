@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -229,7 +228,9 @@ func computeFullGrid(detectedGridNodes []GridNode) ([MMI_N_NODES]GridNode, error
 
 	forwardEffectiveAngleRad := (HorizontalAngleRad + VerticalAngleRad - math.Pi/2) / 2
 	backwardEffectiveAngleRad := -forwardEffectiveAngleRad
-	log.Printf("Grid's horizontal angle: %.2f; Grid's vertical angle: %.2f. Effective Angle: %.2f", rad2Deg(HorizontalAngleRad), rad2Deg(VerticalAngleRad), rad2Deg(forwardEffectiveAngleRad))
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Printf("Grid's horizontal angle: %.2f; Grid's vertical angle: %.2f. Effective Angle: %.2f", rad2Deg(HorizontalAngleRad), rad2Deg(VerticalAngleRad), rad2Deg(forwardEffectiveAngleRad))
+	}
 
 	var minX float64 = math.MaxFloat64
 	var maxX float64 = -math.MaxFloat64
@@ -275,7 +276,9 @@ func computeFullGrid(detectedGridNodes []GridNode) ([MMI_N_NODES]GridNode, error
 	ProjectionsX := computeBorders(pivotedX)
 	ProjectionsY := computeBorders(pivotedY)
 
-	log.Printf("X projected borders: %d; Y projected borders: %d", len(ProjectionsX), len(ProjectionsY))
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Printf("X projected borders: %d; Y projected borders: %d", len(ProjectionsX), len(ProjectionsY))
+	}
 
 	var n int
 	for i := 0; i < len(ProjectionsX); i++ {
@@ -315,11 +318,15 @@ func detectPrimaryGridNodes(mat gocv.Mat) ([]GridNode, error) {
 	gridNodes := make([]GridNode, 0)
 
 	if ok := gocv.IMWrite(filepath.Join("compute", "original.bmp"), mat); !ok {
-		log.Println("DetectPrimaryGridNodes: original.bmp imwrite nok")
+		if LOG_LEVEL <= WARNING_LEVEL {
+			WARNINGLogger.Println("DetectPrimaryGridNodes: original.bmp imwrite nok")
+		}
 	}
 
 	_min, _max, _, _ := gocv.MinMaxLoc(mat)
-	log.Println("DetectPrimaryGridNodes: mat min/max: ", _min, _max)
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Println("DetectPrimaryGridNodes: mat min/max: ", _min, _max)
+	}
 
 	dilatedMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
 	defer dilatedMat.Close()
@@ -331,7 +338,9 @@ func detectPrimaryGridNodes(mat gocv.Mat) ([]GridNode, error) {
 	)
 
 	if ok := gocv.IMWrite(filepath.Join("compute", "dilated_mat.bmp"), dilatedMat); !ok {
-		log.Println("DetectPrimaryGridNodes: dilated_mat.bmp imwrite nok")
+		if LOG_LEVEL <= WARNING_LEVEL {
+			WARNINGLogger.Println("DetectPrimaryGridNodes: dilated_mat.bmp imwrite nok")
+		}
 	}
 
 	compareMat := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC1)
@@ -341,12 +350,16 @@ func detectPrimaryGridNodes(mat gocv.Mat) ([]GridNode, error) {
 	gocv.BitwiseNot(compareMat, &compareMat)
 
 	if ok := gocv.IMWrite(filepath.Join("compute", "compare_mat.bmp"), compareMat); !ok {
-		log.Println("DetectPrimaryGridNodes: compare_mat.bmp imwrite nok")
+		if LOG_LEVEL <= WARNING_LEVEL {
+			WARNINGLogger.Println("DetectPrimaryGridNodes: compare_mat.bmp imwrite nok")
+		}
 	}
 
 	// Detect Contours
 	contours := gocv.FindContours(compareMat, gocv.RetrievalTree, gocv.ChainApproxSimple)
-	log.Printf("Found %d contours", contours.Size())
+	if LOG_LEVEL <= DEBUG_LEVEL {
+		DEBUGLogger.Printf("Found %d contours", contours.Size())
+	}
 
 	if contours.Size() < NODE_DETECTION_MINIMUM_PRIMARY_CONTOURS {
 		err = fmt.Errorf("not enough contours detected: %d", contours.Size())
@@ -389,7 +402,6 @@ func detectPrimaryGridNodes(mat gocv.Mat) ([]GridNode, error) {
 	})
 
 	for i, gridNode := range gridNodes {
-		// log.Printf("Ellipse %d; Position: %v", i, ellipse.Center)
 		gocv.Ellipse(&thresholdedMatchResultWithEllipses, image.Pt(gridNode.X, gridNode.Y), image.Pt(MMI_EXTRACTION_ELLIPSE_RADIUS, MMI_EXTRACTION_ELLIPSE_RADIUS), 0, 0, 360, color.RGBA{R: 0, G: 0, B: 255, A: 127}, 2)
 		gocv.PutText(
 			&thresholdedMatchResultWithEllipses,
@@ -403,7 +415,9 @@ func detectPrimaryGridNodes(mat gocv.Mat) ([]GridNode, error) {
 	}
 
 	if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result_with_detected_ellipses.bmp"), thresholdedMatchResultWithEllipses); !ok {
-		log.Println("DetectPrimaryGridNodes: thresholded_matching_result_with_detected_ellipses.bmp imwrite nok")
+		if LOG_LEVEL <= WARNING_LEVEL {
+			WARNINGLogger.Println("DetectPrimaryGridNodes: thresholded_matching_result_with_detected_ellipses.bmp imwrite nok")
+		}
 	}
 	return gridNodes, err
 }

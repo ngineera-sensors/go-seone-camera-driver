@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
@@ -36,30 +35,40 @@ var f mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
 func init() {
 	mqttScheme := os.Getenv("MQTT_SCHEME")
 	if mqttScheme != "" {
-		log.Printf("Setting MQTT_SCHEME value provided in MQTT_SCHEME env variable : %s", mqttScheme)
+		if LOG_LEVEL <= INFO_LEVEL {
+			INFOLogger.Printf("Setting MQTT_SCHEME value provided in MQTT_SCHEME env variable : %s", mqttScheme)
+		}
 		MQTT_SCHEME = mqttScheme
 	}
 	mqttHost := os.Getenv("MQTT_HOST")
 	if mqttHost != "" {
-		log.Printf("Setting MQTT_HOST value provided in MQTT_HOST env variable : %s", mqttHost)
+		if LOG_LEVEL <= INFO_LEVEL {
+			INFOLogger.Printf("Setting MQTT_HOST value provided in MQTT_HOST env variable : %s", mqttHost)
+		}
 		MQTT_HOST = mqttHost
 	}
 	if MQTT_HOST == "" {
-		log.Fatalf("MQTT_HOST is not defined neither by default nor manually. Exiting.")
+		ERRORLogger.Fatalf("MQTT_HOST is not defined neither by default nor manually. Exiting.")
 	}
 	mqttPort := os.Getenv("MQTT_PORT")
 	if mqttPort != "" {
-		log.Printf("Setting MQTT_PORT value provided in MQTT_PORT env variable : %s", mqttPort)
+		if LOG_LEVEL <= INFO_LEVEL {
+			INFOLogger.Printf("Setting MQTT_PORT value provided in MQTT_PORT env variable : %s", mqttPort)
+		}
 		MQTT_PORT = mqttPort
 	}
 	mqttUsername := os.Getenv("MQTT_USERNAME")
 	if mqttUsername != "" {
-		log.Println("Setting MQTT_USERNAME value provided in MQTT_USERNAME env variable : ***")
+		if LOG_LEVEL <= INFO_LEVEL {
+			INFOLogger.Println("Setting MQTT_USERNAME value provided in MQTT_USERNAME env variable : ***")
+		}
 		MQTT_USERNAME = mqttUsername
 	}
 	mqttPassword := os.Getenv("MQTT_PASSWORD")
 	if mqttPassword != "" {
-		log.Println("Setting MQTT_PASSWORD value provided in MQTT_PASSWORD env variable : ***")
+		if LOG_LEVEL <= INFO_LEVEL {
+			INFOLogger.Println("Setting MQTT_PASSWORD value provided in MQTT_PASSWORD env variable : ***")
+		}
 		MQTT_PASSWORD = mqttPassword
 	}
 }
@@ -71,7 +80,9 @@ func NewMQTTClient() (mqtt.Client, error) {
 	// mqttClientID := fmt.Sprintf("seone_%s", SEONE_SN)
 	mqttClientID := uuid.New().String()
 
-	log.Printf("Connecting to MQTT Broker: %s. ClientID: %s", mqttBrokerUri, mqttClientID)
+	if LOG_LEVEL <= INFO_LEVEL {
+		INFOLogger.Printf("Connecting to MQTT Broker: %s. ClientID: %s", mqttBrokerUri, mqttClientID)
+	}
 
 	opts := mqtt.
 		NewClientOptions().
@@ -98,8 +109,9 @@ func PublishImage(topic string, mat gocv.Mat, mqttClient mqtt.Client) error {
 	imgBytes := imgBuf.GetBytes()
 	var b64bytes []byte = make([]byte, base64.StdEncoding.EncodedLen(len(imgBytes)))
 	base64.StdEncoding.Encode(b64bytes, imgBytes)
-	mqttClient.Publish(topic, DEFAULT_QOS, false, b64bytes)
-	return err
+	token := mqttClient.Publish(topic, DEFAULT_QOS, false, b64bytes)
+	token.Wait()
+	return token.Error()
 }
 
 func PublishJsonMsg(topic string, obj interface{}, mqttClient mqtt.Client) error {
@@ -107,6 +119,7 @@ func PublishJsonMsg(topic string, obj interface{}, mqttClient mqtt.Client) error
 	if err != nil {
 		return err
 	}
-	mqttClient.Publish(topic, DEFAULT_QOS, false, msg)
-	return err
+	token := mqttClient.Publish(topic, DEFAULT_QOS, false, msg)
+	token.Wait()
+	return token.Error()
 }
