@@ -10,3 +10,4 @@ set-env.sh
 *.bin
 lib*
 include*
+go-seone-camera-driver
