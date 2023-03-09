@@ -40,6 +40,14 @@ var (
 	NODE_DETECTION_EFFECTIVE_GRID [MMI_N_NODES]GridNode
 )
 
+var (
+	NODE_DETECTION_IMAGES_PATH = "images"
+)
+
+func InitImagesPath() {
+	os.MkdirAll(NODE_DETECTION_IMAGES_PATH, os.ModePerm)
+}
+
 func computeBorders(a []float64) []float64 {
 	// log.Println("Computing borders. Initial elements:", len(a))
 
@@ -317,7 +325,7 @@ func detectPrimaryGridNodes(mat gocv.Mat) ([]GridNode, error) {
 	var err error
 	gridNodes := make([]GridNode, 0)
 
-	if ok := gocv.IMWrite(filepath.Join("compute", "original.bmp"), mat); !ok {
+	if ok := gocv.IMWrite(filepath.Join(NODE_DETECTION_IMAGES_PATH, "original.bmp"), mat); !ok {
 		if LOG_LEVEL <= WARNING_LEVEL {
 			WARNINGLogger.Println("DetectPrimaryGridNodes: original.bmp imwrite nok")
 		}
@@ -337,7 +345,7 @@ func detectPrimaryGridNodes(mat gocv.Mat) ([]GridNode, error) {
 		gocv.GetStructuringElement(gocv.MorphRect, image.Pt(NODE_DETECTION_DILATION_KERNEL_SIZE, NODE_DETECTION_DILATION_KERNEL_SIZE)),
 	)
 
-	if ok := gocv.IMWrite(filepath.Join("compute", "dilated_mat.bmp"), dilatedMat); !ok {
+	if ok := gocv.IMWrite(filepath.Join(NODE_DETECTION_IMAGES_PATH, "dilated_mat.bmp"), dilatedMat); !ok {
 		if LOG_LEVEL <= WARNING_LEVEL {
 			WARNINGLogger.Println("DetectPrimaryGridNodes: dilated_mat.bmp imwrite nok")
 		}
@@ -349,7 +357,7 @@ func detectPrimaryGridNodes(mat gocv.Mat) ([]GridNode, error) {
 	gocv.Compare(mat, dilatedMat, &compareMat, gocv.CompareGE)
 	gocv.BitwiseNot(compareMat, &compareMat)
 
-	if ok := gocv.IMWrite(filepath.Join("compute", "compare_mat.bmp"), compareMat); !ok {
+	if ok := gocv.IMWrite(filepath.Join(NODE_DETECTION_IMAGES_PATH, "compare_mat.bmp"), compareMat); !ok {
 		if LOG_LEVEL <= WARNING_LEVEL {
 			WARNINGLogger.Println("DetectPrimaryGridNodes: compare_mat.bmp imwrite nok")
 		}
@@ -414,7 +422,7 @@ func detectPrimaryGridNodes(mat gocv.Mat) ([]GridNode, error) {
 		)
 	}
 
-	if ok := gocv.IMWrite(filepath.Join("compute", "thresholded_matching_result_with_detected_ellipses.bmp"), thresholdedMatchResultWithEllipses); !ok {
+	if ok := gocv.IMWrite(filepath.Join(NODE_DETECTION_IMAGES_PATH, "thresholded_matching_result_with_detected_ellipses.bmp"), thresholdedMatchResultWithEllipses); !ok {
 		if LOG_LEVEL <= WARNING_LEVEL {
 			WARNINGLogger.Println("DetectPrimaryGridNodes: thresholded_matching_result_with_detected_ellipses.bmp imwrite nok")
 		}

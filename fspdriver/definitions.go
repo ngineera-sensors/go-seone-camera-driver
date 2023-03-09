@@ -208,11 +208,12 @@ const (
 )
 
 var (
+	SEONE_SN_PATH = filepath.Join("config", "serialnumber.txt")
 	SEONE_SN = ""
 )
 
-func init() {
-	sn, err := os.ReadFile(filepath.Join("config", "serialnumber.txt"))
+func InitSerialNumber() {
+	sn, err := os.ReadFile(SEONE_SN_PATH)
 	if err != nil {
 		ERRORLogger.Fatal(err)
 	}
